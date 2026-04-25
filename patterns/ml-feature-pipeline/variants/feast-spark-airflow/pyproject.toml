@@ -1,0 +1,10 @@
+[project]
+name = "ml-feature-pipeline-feast-spark-airflow"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "feast[redis]>=0.40.0",
+    "pyspark>=3.5.1",
+    "apache-airflow>=2.9.3",
+    "apache-airflow-providers-apache-spark>=4.7.0",
+]

@@ -1,0 +1,7 @@
+[project]
+name = "ml-feature-pipeline-flink-spark-offline"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pyspark>=3.5.1",
+]

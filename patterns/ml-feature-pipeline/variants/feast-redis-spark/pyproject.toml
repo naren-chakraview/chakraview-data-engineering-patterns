@@ -1,0 +1,11 @@
+[project]
+name = "ml-feature-pipeline-feast-redis-spark"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "feast[redis]>=0.40.0",
+    "pyspark>=3.5.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pandas>=2.0"]
