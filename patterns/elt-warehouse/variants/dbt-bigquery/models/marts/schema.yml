@@ -1,0 +1,12 @@
+version: 2
+
+models:
+  - name: orders_summary
+    description: Daily order counts and revenue by status
+    columns:
+      - name: order_date
+        tests: [not_null]
+      - name: order_count
+        tests: [not_null]
+      - name: total_revenue_usd
+        tests: [not_null]

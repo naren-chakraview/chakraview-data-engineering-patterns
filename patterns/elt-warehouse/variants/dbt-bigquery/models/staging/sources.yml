@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Raw tables loaded by the ingestion layer
+    tables:
+      - name: orders
+        description: Raw orders from the source system
+        columns:
+          - name: order_id
+            tests: [not_null, unique]
+          - name: customer_id
+            tests: [not_null]
+          - name: amount_cents
+            tests: [not_null]

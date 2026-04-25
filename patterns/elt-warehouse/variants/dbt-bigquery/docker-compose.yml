@@ -1,0 +1,4 @@
+# This variant connects to BigQuery (cloud). No local services required.
+# Authenticate with: gcloud auth application-default login
+version: "3.9"
+services: {}

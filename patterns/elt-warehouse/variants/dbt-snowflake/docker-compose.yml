@@ -1,0 +1,4 @@
+# This variant connects to Snowflake (cloud). No local services required.
+# Set credentials in .env and run: dbt run
+version: "3.9"
+services: {}
