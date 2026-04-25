@@ -1988,4 +1988,2606 @@ git commit -m "docs: all 9 pattern pages with fit notes, variants table, and cro
 
 ---
 
-*Tasks 11–15 continue in the next batch.*
+---
+
+## Tasks 11–15
+
+---
+
+### Task 11: batch-lakehouse (Pattern README + 3 Variants)
+
+**Files:**
+- Create: `patterns/batch-lakehouse/README.md`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg/README.md`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg/build.sbt`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg/src/main/scala/io/chakraview/lakehouse/Main.scala`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg/src/main/scala/io/chakraview/lakehouse/IcebergWriter.scala`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg/src/main/scala/io/chakraview/lakehouse/SparkSessions.scala`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg/docker-compose.yml`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg/.env.example`
+- Create: `patterns/batch-lakehouse/variants/spark-delta/README.md`
+- Create: `patterns/batch-lakehouse/variants/spark-delta/build.sbt`
+- Create: `patterns/batch-lakehouse/variants/spark-delta/src/main/scala/io/chakraview/lakehouse/Main.scala`
+- Create: `patterns/batch-lakehouse/variants/spark-delta/src/main/scala/io/chakraview/lakehouse/DeltaWriter.scala`
+- Create: `patterns/batch-lakehouse/variants/spark-delta/docker-compose.yml`
+- Create: `patterns/batch-lakehouse/variants/spark-delta/.env.example`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg-airflow/README.md`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg-airflow/build.sbt`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg-airflow/src/main/scala/io/chakraview/lakehouse/Main.scala`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg-airflow/config/dags/batch_lakehouse_dag.py`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg-airflow/docker-compose.yml`
+- Create: `patterns/batch-lakehouse/variants/spark-iceberg-airflow/.env.example`
+
+- [ ] **Step 1: Create `patterns/batch-lakehouse/README.md`**
+
+```markdown
+# Batch Lakehouse
+
+Scheduled Spark jobs read from source, transform, and write to an open table format on object storage.
+
+## Variants
+
+| Variant | Table format | Orchestration | Pull branch |
+|---|---|---|---|
+| `spark-iceberg` | Iceberg 1.5 | None (run manually or via cron) | `pattern/batch-lakehouse/spark-iceberg` |
+| `spark-delta` | Delta Lake 3.1 | None | `pattern/batch-lakehouse/spark-delta` |
+| `spark-iceberg-airflow` | Iceberg 1.5 | Airflow 2.9 DAG | `pattern/batch-lakehouse/spark-iceberg-airflow` |
+
+## Choosing between variants
+
+- **spark-iceberg**: default choice. Iceberg is read by Trino, Presto, Flink, DuckDB, and Athena without extra configuration.
+- **spark-delta**: choose when the team lives in Databricks or needs `DeltaTable.merge()` API ergonomics.
+- **spark-iceberg-airflow**: choose when you need scheduled retry, SLA alerting, and backfill out of the box.
+
+## Prerequisites
+
+- Scala 2.12, SBT 1.9+
+- Java 11+
+- Spark 3.5 installed locally (`spark-submit` on PATH), or use `spark-shell` for interactive exploration
+- Docker + Docker Compose (for local MinIO / Iceberg REST / Airflow)
+```
+
+- [ ] **Step 2: Create `patterns/batch-lakehouse/variants/spark-iceberg/build.sbt`**
+
+```scala
+ThisBuild / scalaVersion := "2.12.18"
+ThisBuild / version      := "0.1.0"
+ThisBuild / organization := "io.chakraview"
+
+val sparkVersion   = "3.5.1"
+val icebergVersion = "1.5.2"
+val hadoopVersion  = "3.3.6"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "batch-lakehouse-spark-iceberg",
+    libraryDependencies ++= Seq(
+      "org.apache.spark"  %% "spark-core"                     % sparkVersion   % "provided",
+      "org.apache.spark"  %% "spark-sql"                      % sparkVersion   % "provided",
+      "org.apache.iceberg"  % "iceberg-spark-runtime-3.5_2.12" % icebergVersion,
+      "org.apache.hadoop"   % "hadoop-aws"                    % hadoopVersion  % "provided",
+      "com.amazonaws"       % "aws-java-sdk-bundle"           % "1.12.262"     % "provided",
+    ),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf"         => MergeStrategy.concat
+      case _                        => MergeStrategy.first
+    },
+  )
+```
+
+- [ ] **Step 3: Create `SparkSessions.scala`**
+
+```scala
+package io.chakraview.lakehouse
+
+import org.apache.spark.sql.SparkSession
+
+object SparkSessions {
+  def iceberg(appName: String): SparkSession =
+    SparkSession.builder()
+      .appName(appName)
+      .config("spark.sql.extensions",
+        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+      .config("spark.sql.catalog.lakehouse",
+        "org.apache.iceberg.spark.SparkCatalog")
+      .config("spark.sql.catalog.lakehouse.type", "rest")
+      .config("spark.sql.catalog.lakehouse.uri",
+        sys.env.getOrElse("ICEBERG_REST_URI", "http://localhost:8181"))
+      .config("spark.sql.catalog.lakehouse.warehouse",
+        sys.env.getOrElse("LAKEHOUSE_WAREHOUSE", "s3a://chakra-lakehouse/"))
+      .config("spark.hadoop.fs.s3a.endpoint",
+        sys.env.getOrElse("S3_ENDPOINT", "http://localhost:9000"))
+      .config("spark.hadoop.fs.s3a.access.key",
+        sys.env.getOrElse("AWS_ACCESS_KEY_ID", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.secret.key",
+        sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.path.style.access", "true")
+      .config("spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem")
+      .getOrCreate()
+}
+```
+
+- [ ] **Step 4: Create `IcebergWriter.scala`**
+
+```scala
+package io.chakraview.lakehouse
+
+import org.apache.spark.sql.{DataFrame, SparkSession}
+
+object IcebergWriter {
+
+  def append(df: DataFrame, table: String): Unit =
+    df.writeTo(table)
+      .option("write.format.default", "parquet")
+      .option("write.parquet.compression-codec", "snappy")
+      .createOrReplace()
+
+  def upsert(spark: SparkSession, df: DataFrame, table: String, idCol: String): Unit = {
+    df.createOrReplaceTempView("__source")
+    spark.sql(s"""
+      MERGE INTO $table t
+      USING __source s ON t.$idCol = s.$idCol
+      WHEN MATCHED     THEN UPDATE SET *
+      WHEN NOT MATCHED THEN INSERT *
+    """)
+  }
+}
+```
+
+- [ ] **Step 5: Create `Main.scala` (spark-iceberg)**
+
+```scala
+package io.chakraview.lakehouse
+
+import org.apache.spark.sql.functions._
+
+object Main {
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSessions.iceberg("batch-lakehouse-iceberg")
+    import spark.implicits._
+
+    // 1. Read source CSV from object storage
+    val source = spark.read
+      .option("header", "true")
+      .option("inferSchema", "true")
+      .csv(s"s3a://chakra-lakehouse/raw/orders/")
+
+    // 2. Transform
+    val transformed = source
+      .withColumn("processed_at", current_timestamp())
+      .withColumn("amount_usd", col("amount_cents").divide(100.0))
+      .filter(col("order_id").isNotNull)
+
+    // 3. Write to Iceberg (create-or-replace for idempotent batch runs)
+    IcebergWriter.append(transformed, "lakehouse.orders.processed")
+
+    println(s"Wrote ${transformed.count()} rows to lakehouse.orders.processed")
+    spark.stop()
+  }
+}
+```
+
+- [ ] **Step 6: Create `patterns/batch-lakehouse/variants/spark-iceberg/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/chakra-lakehouse &&
+        mc mb --ignore-existing local/chakra-lakehouse/raw/orders
+      "
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.10.0
+    depends_on:
+      minio:
+        condition: service_healthy
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://chakra-lakehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+
+volumes:
+  minio-data:
+```
+
+- [ ] **Step 7: Create `patterns/batch-lakehouse/variants/spark-iceberg/.env.example`**
+
+```bash
+# MinIO (local S3 substitute)
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+
+# Iceberg REST catalog (started by docker-compose)
+ICEBERG_REST_URI=http://localhost:8181
+LAKEHOUSE_WAREHOUSE=s3a://chakra-lakehouse/
+```
+
+- [ ] **Step 8: Create `patterns/batch-lakehouse/variants/spark-iceberg/README.md`**
+
+```markdown
+# Batch Lakehouse — Spark + Iceberg
+
+## When to use
+Multi-engine environment: Trino, Presto, Athena, or DuckDB must read the same tables Spark writes.
+Portability matters more than deepest Spark integration.
+
+## When NOT to use
+Your team is Databricks-only and portability is not a concern — use spark-delta instead.
+
+## Trade-offs vs spark-delta
+- **Iceberg**: any engine reads/writes; broader schema evolution; REST catalog required
+- **Delta**: simpler local setup (no REST catalog); `DeltaTable.merge()` is more ergonomic; best on Databricks
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d          # starts MinIO + Iceberg REST catalog
+sbt assembly                  # builds fat JAR
+spark-submit \
+  --class io.chakraview.lakehouse.Main \
+  --master local[*] \
+  target/scala-2.12/batch-lakehouse-spark-iceberg-assembly-0.1.0.jar
+```
+
+MinIO console: http://localhost:9001 (minioadmin / minioadmin)
+Iceberg REST: http://localhost:8181
+```
+
+- [ ] **Step 9: Create `spark-delta` variant — `build.sbt`**
+
+```scala
+ThisBuild / scalaVersion := "2.12.18"
+ThisBuild / version      := "0.1.0"
+ThisBuild / organization := "io.chakraview"
+
+val sparkVersion  = "3.5.1"
+val deltaVersion  = "3.1.0"
+val hadoopVersion = "3.3.6"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "batch-lakehouse-spark-delta",
+    libraryDependencies ++= Seq(
+      "org.apache.spark"  %% "spark-core"         % sparkVersion  % "provided",
+      "org.apache.spark"  %% "spark-sql"          % sparkVersion  % "provided",
+      "io.delta"          %% "delta-spark"        % deltaVersion,
+      "org.apache.hadoop"  % "hadoop-aws"         % hadoopVersion % "provided",
+      "com.amazonaws"      % "aws-java-sdk-bundle" % "1.12.262"   % "provided",
+    ),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf"         => MergeStrategy.concat
+      case _                        => MergeStrategy.first
+    },
+  )
+```
+
+- [ ] **Step 10: Create `spark-delta/src/main/scala/io/chakraview/lakehouse/DeltaWriter.scala`**
+
+```scala
+package io.chakraview.lakehouse
+
+import io.delta.tables.DeltaTable
+import org.apache.spark.sql.{DataFrame, SparkSession}
+
+object DeltaWriter {
+
+  def append(df: DataFrame, path: String): Unit =
+    df.write
+      .format("delta")
+      .mode("append")
+      .save(path)
+
+  def merge(spark: SparkSession, df: DataFrame, path: String, idCol: String): Unit = {
+    if (!DeltaTable.isDeltaTable(spark, path)) {
+      df.write.format("delta").save(path)
+      return
+    }
+    DeltaTable.forPath(spark, path)
+      .alias("target")
+      .merge(df.alias("source"), s"target.$idCol = source.$idCol")
+      .whenMatched().updateAll()
+      .whenNotMatched().insertAll()
+      .execute()
+  }
+}
+```
+
+- [ ] **Step 11: Create `spark-delta/src/main/scala/io/chakraview/lakehouse/Main.scala`**
+
+```scala
+package io.chakraview.lakehouse
+
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
+
+object Main {
+  private val TablePath =
+    sys.env.getOrElse("DELTA_TABLE_PATH", "s3a://chakra-lakehouse/delta/orders/processed")
+
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("batch-lakehouse-delta")
+      .config("spark.sql.extensions",
+        "io.delta.sql.DeltaSparkSessionExtension")
+      .config("spark.sql.catalog.spark_catalog",
+        "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+      .config("spark.hadoop.fs.s3a.endpoint",
+        sys.env.getOrElse("S3_ENDPOINT", "http://localhost:9000"))
+      .config("spark.hadoop.fs.s3a.access.key",
+        sys.env.getOrElse("AWS_ACCESS_KEY_ID", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.secret.key",
+        sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.path.style.access", "true")
+      .config("spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem")
+      .getOrCreate()
+
+    val source = spark.read
+      .option("header", "true")
+      .option("inferSchema", "true")
+      .csv("s3a://chakra-lakehouse/raw/orders/")
+
+    val transformed = source
+      .withColumn("processed_at", current_timestamp())
+      .withColumn("amount_usd", col("amount_cents").divide(100.0))
+      .filter(col("order_id").isNotNull)
+
+    // Merge: upsert by order_id so the job is idempotent on re-run
+    DeltaWriter.merge(spark, transformed, TablePath, "order_id")
+
+    println(s"Merged ${transformed.count()} rows into $TablePath")
+    spark.stop()
+  }
+}
+```
+
+- [ ] **Step 12: Create `spark-delta/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/chakra-lakehouse
+      "
+
+volumes:
+  minio-data:
+```
+
+- [ ] **Step 13: Create `spark-delta/.env.example`**
+
+```bash
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+DELTA_TABLE_PATH=s3a://chakra-lakehouse/delta/orders/processed
+```
+
+- [ ] **Step 14: Create `spark-delta/README.md`**
+
+```markdown
+# Batch Lakehouse — Spark + Delta Lake
+
+## When to use
+Databricks-first stack. Want `DeltaTable.merge()` ergonomics and tightest Spark integration.
+
+## When NOT to use
+Queries from Trino, Presto, or non-Spark engines — use spark-iceberg instead.
+
+## Trade-offs vs spark-iceberg
+- **Delta**: simpler setup (no REST catalog); best `MERGE` ergonomics on Spark; Databricks-native
+- **Iceberg**: reads from any engine; more portable; requires REST catalog config
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+sbt assembly
+spark-submit \
+  --class io.chakraview.lakehouse.Main \
+  --master local[*] \
+  target/scala-2.12/batch-lakehouse-spark-delta-assembly-0.1.0.jar
+```
+```
+
+- [ ] **Step 15: Create `spark-iceberg-airflow` variant — `config/dags/batch_lakehouse_dag.py`**
+
+```python
+"""
+Batch Lakehouse DAG — Spark + Iceberg + Airflow
+
+Runs the Spark job daily, retries twice on failure, alerts on SLA miss.
+Requires the Spark app JAR to be present at SPARK_APP_JAR (set in Airflow Variables).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.models import Variable
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+
+default_args = {
+    "owner": "data-engineering",
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "sla": timedelta(hours=2),
+}
+
+with DAG(
+    dag_id="batch_lakehouse_iceberg",
+    default_args=default_args,
+    description="Daily Spark batch job writing orders to Iceberg",
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    tags=["batch", "lakehouse", "iceberg"],
+) as dag:
+
+    ingest = SparkSubmitOperator(
+        task_id="ingest_orders_to_iceberg",
+        application=Variable.get("spark_app_jar",
+            default_var="/opt/spark-apps/batch-lakehouse-spark-iceberg-assembly-0.1.0.jar"),
+        name="batch-lakehouse-iceberg-{{ ds }}",
+        conf={
+            "spark.sql.extensions":
+                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+            "spark.sql.catalog.lakehouse":
+                "org.apache.iceberg.spark.SparkCatalog",
+            "spark.sql.catalog.lakehouse.type": "rest",
+            "spark.sql.catalog.lakehouse.uri":
+                Variable.get("iceberg_rest_uri", default_var="http://iceberg-rest:8181"),
+            "spark.hadoop.fs.s3a.path.style.access": "true",
+        },
+        env_vars={
+            "ICEBERG_REST_URI":     Variable.get("iceberg_rest_uri",    default_var="http://iceberg-rest:8181"),
+            "LAKEHOUSE_WAREHOUSE":  Variable.get("lakehouse_warehouse",  default_var="s3a://chakra-lakehouse/"),
+            "S3_ENDPOINT":          Variable.get("s3_endpoint",          default_var="http://minio:9000"),
+            "AWS_ACCESS_KEY_ID":    Variable.get("aws_access_key_id",    default_var="minioadmin"),
+            "AWS_SECRET_ACCESS_KEY": Variable.get("aws_secret_access_key", default_var="minioadmin"),
+        },
+    )
+```
+
+- [ ] **Step 16: Create `spark-iceberg-airflow/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/chakra-lakehouse
+      "
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.10.0
+    depends_on:
+      minio:
+        condition: service_healthy
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://chakra-lakehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+
+  airflow:
+    image: apache/airflow:2.9.3-python3.11
+    command: standalone
+    depends_on:
+      minio:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-dev-secret-change-in-prod}
+    volumes:
+      - ./config/dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+
+volumes:
+  minio-data:
+  airflow-logs:
+```
+
+- [ ] **Step 17: Create `spark-iceberg-airflow/.env.example`**
+
+```bash
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+ICEBERG_REST_URI=http://localhost:8181
+LAKEHOUSE_WAREHOUSE=s3a://chakra-lakehouse/
+AIRFLOW_SECRET_KEY=dev-secret-change-in-prod
+```
+
+- [ ] **Step 18: Create `spark-iceberg-airflow/README.md`**
+
+```markdown
+# Batch Lakehouse — Spark + Iceberg + Airflow
+
+## When to use
+Scheduled retry, SLA alerting, and backfill are required. Team already has or wants Airflow.
+
+## When NOT to use
+No scheduling needed — use spark-iceberg instead (simpler, no Airflow overhead).
+
+## How to run locally
+
+```bash
+cp .env.example .env
+sbt assembly
+cp target/scala-2.12/batch-lakehouse-spark-iceberg-assembly-0.1.0.jar \
+   /tmp/spark-apps/   # path Airflow picks up via Variable spark_app_jar
+docker compose up -d
+```
+
+Airflow UI: http://localhost:8080 (admin / admin on first run)
+Trigger DAG: `batch_lakehouse_iceberg`
+MinIO console: http://localhost:9001
+```
+
+- [ ] **Step 19: Verify all required files exist for all three variants**
+
+```bash
+for variant in spark-iceberg spark-delta spark-iceberg-airflow; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/batch-lakehouse/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All batch-lakehouse variant files present"
+```
+
+Expected: `All batch-lakehouse variant files present`
+
+- [ ] **Step 20: Commit**
+
+```bash
+git add patterns/batch-lakehouse/
+git commit -m "feat: batch-lakehouse pattern — spark-iceberg, spark-delta, spark-iceberg-airflow variants"
+```
+
+---
+
+### Task 12: streaming-lakehouse (Pattern README + 2 Variants)
+
+**Files:**
+- Create: `patterns/streaming-lakehouse/README.md`
+- Create: `patterns/streaming-lakehouse/variants/flink-iceberg/{README.md,pom.xml,src/,docker-compose.yml,.env.example}`
+- Create: `patterns/streaming-lakehouse/variants/spark-delta/{README.md,build.sbt,src/,docker-compose.yml,.env.example}`
+
+- [ ] **Step 1: Create `patterns/streaming-lakehouse/README.md`**
+
+```markdown
+# Streaming Lakehouse
+
+Continuous pipeline reads Kafka events, processes them, writes to a lakehouse with sub-minute latency.
+
+## Variants
+
+| Variant | Engine | Table format | Latency floor | Pull branch |
+|---|---|---|---|---|
+| `flink-iceberg` | Flink 1.19 (Java) | Iceberg 1.5 | ~5s (checkpoint) | `pattern/streaming-lakehouse/flink-iceberg` |
+| `spark-delta` | Spark 3.5 Structured Streaming (Scala) | Delta Lake 3.1 | ~30–60s (trigger) | `pattern/streaming-lakehouse/spark-delta` |
+
+## Choosing between variants
+
+- **flink-iceberg**: exactly-once per-event, native event-time watermarking, sub-minute freshness. Higher operational complexity (Flink cluster + Kafka).
+- **spark-delta**: micro-batch, latency floor ~30s, simpler if team already knows Spark SQL.
+
+## Prerequisites
+
+- Docker + Docker Compose (starts Kafka + Flink or Kafka + MinIO)
+- Java 17 + Maven 3.9 (flink-iceberg) OR Scala 2.12 + SBT 1.9 (spark-delta)
+- A running Kafka topic `events.orders` (docker-compose creates it automatically)
+```
+
+- [ ] **Step 2: Create `patterns/streaming-lakehouse/variants/flink-iceberg/pom.xml`**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.chakraview</groupId>
+  <artifactId>streaming-lakehouse-flink-iceberg</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <java.version>17</java.version>
+    <flink.version>1.19.0</flink.version>
+    <iceberg.version>1.5.2</iceberg.version>
+    <kafka.connector.version>3.1.0-1.19</kafka.connector.version>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-streaming-java</artifactId>
+      <version>${flink.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-kafka</artifactId>
+      <version>${kafka.connector.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-json</artifactId>
+      <version>${flink.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-flink-runtime-1.19</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-aws</artifactId>
+      <version>3.3.6</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+```
+
+- [ ] **Step 3: Create `flink-iceberg/src/main/java/io/chakraview/streaming/Main.java`**
+
+```java
+package io.chakraview.streaming;
+
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.flink.CatalogLoader;
+import org.apache.iceberg.flink.TableLoader;
+import org.apache.iceberg.flink.sink.FlinkSink;
+import org.apache.flink.types.Row;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // Exactly-once: Flink checkpoint + Iceberg two-phase commit are atomic.
+        // Files committed to Iceberg only on checkpoint — no partial writes visible.
+        env.enableCheckpointing(60_000, CheckpointingMode.EXACTLY_ONCE);
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(30_000);
+        env.getCheckpointConfig().setCheckpointTimeout(120_000);
+
+        KafkaSource<String> source = KafkaSource.<String>builder()
+            .setBootstrapServers(System.getenv("KAFKA_BOOTSTRAP_SERVERS"))
+            .setTopics("events.orders")
+            .setGroupId("flink-streaming-lakehouse")
+            .setStartingOffsets(OffsetsInitializer.earliest())
+            .setValueOnlyDeserializer(new SimpleStringSchema())
+            .build();
+
+        DataStream<String> rawStream = env.fromSource(
+            source,
+            WatermarkStrategy.<String>forMonotonousTimestamps()
+                .withTimestampAssigner((event, ts) -> EventParser.extractTimestamp(event)),
+            "kafka-orders-source"
+        );
+
+        DataStream<Row> rows = rawStream.map(new EventParser());
+
+        // Iceberg REST catalog backed by MinIO
+        Map<String, String> catalogProps = new HashMap<>();
+        catalogProps.put("type",       "rest");
+        catalogProps.put("uri",        System.getenv("ICEBERG_REST_URI"));
+        catalogProps.put("warehouse",  System.getenv("LAKEHOUSE_WAREHOUSE"));
+        catalogProps.put("io-impl",    "org.apache.iceberg.aws.s3.S3FileIO");
+        catalogProps.put("s3.endpoint", System.getenv("S3_ENDPOINT"));
+        catalogProps.put("s3.path-style-access", "true");
+
+        CatalogLoader catalogLoader = CatalogLoader.custom(
+            "lakehouse", catalogProps,
+            new org.apache.hadoop.conf.Configuration(),
+            "org.apache.iceberg.rest.RESTCatalog"
+        );
+        TableLoader tableLoader = TableLoader.fromCatalog(
+            catalogLoader,
+            TableIdentifier.of("orders", "events")
+        );
+
+        FlinkSink.forRow(rows, IcebergSchema.ORDERS_SCHEMA)
+            .tableLoader(tableLoader)
+            .upsert(false)
+            .append();
+
+        env.execute("streaming-lakehouse-flink-iceberg");
+    }
+}
+```
+
+- [ ] **Step 4: Create `flink-iceberg/src/main/java/io/chakraview/streaming/EventParser.java`**
+
+```java
+package io.chakraview.streaming;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.types.Row;
+
+public class EventParser implements MapFunction<String, Row> {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @Override
+    public Row map(String json) throws Exception {
+        JsonNode node = MAPPER.readTree(json);
+        Row row = new Row(5);
+        row.setField(0, node.get("order_id").asText());
+        row.setField(1, node.get("customer_id").asText());
+        row.setField(2, node.get("amount_cents").asLong());
+        row.setField(3, node.get("status").asText());
+        row.setField(4, node.get("placed_at").asLong());   // epoch millis
+        return row;
+    }
+
+    public static long extractTimestamp(String json) {
+        try {
+            return MAPPER.readTree(json).get("placed_at").asLong();
+        } catch (Exception e) {
+            return System.currentTimeMillis();
+        }
+    }
+}
+```
+
+- [ ] **Step 5: Create `flink-iceberg/src/main/java/io/chakraview/streaming/IcebergSchema.java`**
+
+```java
+package io.chakraview.streaming;
+
+import org.apache.iceberg.Schema;
+import org.apache.iceberg.types.Types;
+
+public final class IcebergSchema {
+    private IcebergSchema() {}
+
+    public static final Schema ORDERS_SCHEMA = new Schema(
+        Types.NestedField.required(1, "order_id",    Types.StringType.get()),
+        Types.NestedField.required(2, "customer_id", Types.StringType.get()),
+        Types.NestedField.required(3, "amount_cents", Types.LongType.get()),
+        Types.NestedField.optional(4, "status",      Types.StringType.get()),
+        Types.NestedField.required(5, "placed_at",   Types.TimestampType.withZone())
+    );
+}
+```
+
+- [ ] **Step 6: Create `flink-iceberg/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  kafka:
+    image: bitnami/kafka:3.7.0
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/chakra-lakehouse
+      "
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.10.0
+    depends_on:
+      minio:
+        condition: service_healthy
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://chakra-lakehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+
+  flink-jobmanager:
+    image: flink:1.19-java17
+    command: jobmanager
+    ports:
+      - "8082:8081"
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 15s
+      retries: 5
+
+  flink-taskmanager:
+    image: flink:1.19-java17
+    command: taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4
+
+volumes:
+  minio-data:
+```
+
+- [ ] **Step 7: Create `flink-iceberg/.env.example` and `flink-iceberg/README.md`**
+
+`.env.example`:
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+ICEBERG_REST_URI=http://localhost:8181
+LAKEHOUSE_WAREHOUSE=s3://chakra-lakehouse/
+```
+
+`README.md`:
+```markdown
+# Streaming Lakehouse — Flink + Iceberg
+
+## When to use
+Sub-minute latency, exactly-once semantics, native event-time windowing required.
+
+## When NOT to use
+Team has no Flink experience and latency > 30s is acceptable — use spark-delta instead.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+mvn package -DskipTests
+# Submit to local Flink cluster
+flink run -m localhost:8082 \
+  target/streaming-lakehouse-flink-iceberg-0.1.0.jar
+```
+
+Flink UI: http://localhost:8082
+MinIO console: http://localhost:9001
+Iceberg REST: http://localhost:8181
+
+Produce test events to `events.orders`:
+```bash
+docker exec -it <kafka-container> \
+  kafka-console-producer.sh --bootstrap-server localhost:9092 --topic events.orders
+```
+```
+
+- [ ] **Step 8: Create `spark-delta` streaming variant files**
+
+`build.sbt`:
+```scala
+ThisBuild / scalaVersion := "2.12.18"
+ThisBuild / version      := "0.1.0"
+ThisBuild / organization := "io.chakraview"
+
+val sparkVersion  = "3.5.1"
+val deltaVersion  = "3.1.0"
+val kafkaVersion  = "0-10"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "streaming-lakehouse-spark-delta",
+    libraryDependencies ++= Seq(
+      "org.apache.spark" %% "spark-core"               % sparkVersion % "provided",
+      "org.apache.spark" %% "spark-sql"                % sparkVersion % "provided",
+      "org.apache.spark" %% "spark-sql-kafka-0-10"     % sparkVersion,
+      "io.delta"         %% "delta-spark"              % deltaVersion,
+      "org.apache.hadoop"  % "hadoop-aws"              % "3.3.6"      % "provided",
+      "com.amazonaws"      % "aws-java-sdk-bundle"     % "1.12.262"   % "provided",
+    ),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf"         => MergeStrategy.concat
+      case _                        => MergeStrategy.first
+    },
+  )
+```
+
+`src/main/scala/io/chakraview/streaming/Main.scala`:
+```scala
+package io.chakraview.streaming
+
+import io.delta.tables.DeltaTable
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.streaming.Trigger
+import scala.concurrent.duration._
+
+object Main {
+  private val TablePath =
+    sys.env.getOrElse("DELTA_TABLE_PATH", "s3a://chakra-lakehouse/delta/orders/events")
+
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("streaming-lakehouse-spark-delta")
+      .config("spark.sql.extensions",
+        "io.delta.sql.DeltaSparkSessionExtension")
+      .config("spark.sql.catalog.spark_catalog",
+        "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+      .config("spark.hadoop.fs.s3a.endpoint",
+        sys.env.getOrElse("S3_ENDPOINT", "http://localhost:9000"))
+      .config("spark.hadoop.fs.s3a.access.key",
+        sys.env.getOrElse("AWS_ACCESS_KEY_ID", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.secret.key",
+        sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.path.style.access", "true")
+      .config("spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem")
+      .getOrCreate()
+
+    import spark.implicits._
+
+    val raw = spark.readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers",
+        sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+      .option("subscribe", "events.orders")
+      .option("startingOffsets", "earliest")
+      .load()
+
+    val orders = raw.select(from_json(
+        col("value").cast("string"),
+        EventSchema.schema
+      ).alias("data")).select("data.*")
+      .withColumn("ingested_at", current_timestamp())
+
+    // foreachBatch: merge each micro-batch into Delta (idempotent upsert by order_id)
+    val query = orders.writeStream
+      .trigger(Trigger.ProcessingTime(60.seconds))
+      .option("checkpointLocation",
+        sys.env.getOrElse("CHECKPOINT_PATH", "s3a://chakra-lakehouse/checkpoints/orders-streaming/"))
+      .foreachBatch { (batchDf: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row], batchId: Long) =>
+        if (!batchDf.isEmpty) {
+          if (!DeltaTable.isDeltaTable(spark, TablePath)) {
+            batchDf.write.format("delta").save(TablePath)
+          } else {
+            DeltaTable.forPath(spark, TablePath)
+              .alias("target")
+              .merge(batchDf.alias("source"), "target.order_id = source.order_id")
+              .whenMatched().updateAll()
+              .whenNotMatched().insertAll()
+              .execute()
+          }
+        }
+      }
+      .start()
+
+    query.awaitTermination()
+  }
+}
+```
+
+`src/main/scala/io/chakraview/streaming/EventSchema.scala`:
+```scala
+package io.chakraview.streaming
+
+import org.apache.spark.sql.types._
+
+object EventSchema {
+  val schema: StructType = StructType(Seq(
+    StructField("order_id",     StringType,    nullable = false),
+    StructField("customer_id",  StringType,    nullable = false),
+    StructField("amount_cents", LongType,      nullable = false),
+    StructField("status",       StringType,    nullable = true),
+    StructField("placed_at",    TimestampType, nullable = false),
+  ))
+}
+```
+
+`docker-compose.yml` — Kafka + MinIO (no Flink cluster, Spark runs locally):
+```yaml
+version: "3.9"
+
+services:
+  kafka:
+    image: bitnami/kafka:3.7.0
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+volumes:
+  minio-data:
+```
+
+`.env.example`:
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+DELTA_TABLE_PATH=s3a://chakra-lakehouse/delta/orders/events
+CHECKPOINT_PATH=s3a://chakra-lakehouse/checkpoints/orders-streaming/
+```
+
+`README.md`:
+```markdown
+# Streaming Lakehouse — Spark Structured Streaming + Delta Lake
+
+## When to use
+Team knows Spark. Latency > 30 seconds acceptable. Databricks-compatible Delta format preferred.
+
+## When NOT to use
+Sub-minute latency or exactly-once event-time semantics required — use flink-iceberg instead.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+sbt assembly
+spark-submit \
+  --class io.chakraview.streaming.Main \
+  --master local[*] \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \
+  target/scala-2.12/streaming-lakehouse-spark-delta-assembly-0.1.0.jar
+```
+```
+
+- [ ] **Step 9: Verify required files for both variants**
+
+```bash
+for variant in flink-iceberg spark-delta; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/streaming-lakehouse/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All streaming-lakehouse variant files present"
+```
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add patterns/streaming-lakehouse/
+git commit -m "feat: streaming-lakehouse pattern — flink-iceberg (Java) and spark-delta (Scala) variants"
+```
+
+---
+
+### Task 13: elt-warehouse (Pattern README + 3 Variants)
+
+**Files:**
+- Create: `patterns/elt-warehouse/README.md`
+- Per variant (`dbt-snowflake`, `dbt-bigquery`, `dbt-duckdb-airflow`): `README.md`, `dbt_project.yml`, `profiles.yml`, `packages.yml`, `models/staging/stg_orders.sql`, `models/marts/orders_summary.sql`, `.env.example`
+- `dbt-duckdb-airflow` additionally: `dags/dbt_dag.py`, `docker-compose.yml`
+
+- [ ] **Step 1: Create `patterns/elt-warehouse/README.md`**
+
+```markdown
+# ELT / Warehouse
+
+dbt transforms data already in a warehouse. No distributed compute — the warehouse handles scale.
+
+## Variants
+
+| Variant | Warehouse | Pull branch |
+|---|---|---|
+| `dbt-snowflake` | Snowflake | `pattern/elt-warehouse/dbt-snowflake` |
+| `dbt-bigquery` | BigQuery | `pattern/elt-warehouse/dbt-bigquery` |
+| `dbt-duckdb-airflow` | DuckDB (file-based, local) | `pattern/elt-warehouse/dbt-duckdb-airflow` |
+
+## Prerequisites
+
+- Python 3.11, pip
+- `dbt-snowflake` / `dbt-bigquery` / `dbt-duckdb` installed (see each variant's README)
+- Cloud credentials (Snowflake/BigQuery) OR Docker (dbt-duckdb-airflow)
+```
+
+- [ ] **Step 2: Create shared dbt model files used by all three variants**
+
+For all three variants, create the following under `models/`:
+
+`models/staging/sources.yml`:
+```yaml
+version: 2
+
+sources:
+  - name: raw
+    description: Raw tables loaded by the ingestion layer
+    tables:
+      - name: orders
+        description: Raw orders from the source system
+        columns:
+          - name: order_id
+            tests: [not_null, unique]
+          - name: customer_id
+            tests: [not_null]
+          - name: amount_cents
+            tests: [not_null]
+```
+
+`models/staging/stg_orders.sql`:
+```sql
+with source as (
+    select * from {{ source('raw', 'orders') }}
+),
+
+renamed as (
+    select
+        order_id::varchar          as order_id,
+        customer_id::varchar       as customer_id,
+        status::varchar            as status,
+        amount_cents::integer      as amount_cents,
+        amount_cents / 100.0       as amount_usd,
+        placed_at::timestamp       as placed_at,
+        updated_at::timestamp      as updated_at
+    from source
+    where order_id is not null
+)
+
+select * from renamed
+```
+
+`models/marts/orders_summary.sql`:
+```sql
+{{
+  config(
+    materialized='table',
+    tags=['daily', 'finance']
+  )
+}}
+
+with orders as (
+    select * from {{ ref('stg_orders') }}
+),
+
+summary as (
+    select
+        cast(placed_at as date)    as order_date,
+        status,
+        count(*)                   as order_count,
+        sum(amount_usd)            as total_revenue_usd,
+        avg(amount_usd)            as avg_order_value_usd,
+        min(placed_at)             as first_order_at,
+        max(placed_at)             as last_order_at
+    from orders
+    group by 1, 2
+)
+
+select * from summary
+order by order_date desc, status
+```
+
+`models/marts/schema.yml`:
+```yaml
+version: 2
+
+models:
+  - name: orders_summary
+    description: Daily order counts and revenue by status
+    columns:
+      - name: order_date
+        tests: [not_null]
+      - name: order_count
+        tests: [not_null]
+      - name: total_revenue_usd
+        tests: [not_null]
+```
+
+`dbt_project.yml` (same for all three variants — only `name` and `profile` differ):
+```yaml
+name: chakra_lakehouse
+version: "1.0.0"
+config-version: 2
+
+profile: chakra
+
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+
+models:
+  chakra_lakehouse:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts
+```
+
+`packages.yml`:
+```yaml
+packages:
+  - package: dbt-labs/dbt_utils
+    version: ">=1.0.0,<2.0.0"
+```
+
+- [ ] **Step 3: Create `dbt-snowflake/profiles.yml` and `.env.example`**
+
+`profiles.yml`:
+```yaml
+chakra:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account:   "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user:      "{{ env_var('SNOWFLAKE_USER') }}"
+      password:  "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role:      "{{ env_var('SNOWFLAKE_ROLE', 'TRANSFORMER') }}"
+      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'CHAKRA') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
+      schema:    "{{ env_var('SNOWFLAKE_SCHEMA', 'RAW') }}"
+      threads: 4
+      client_session_keep_alive: false
+```
+
+`.env.example`:
+```bash
+SNOWFLAKE_ACCOUNT=myaccount.us-east-1
+SNOWFLAKE_USER=dbt_user
+SNOWFLAKE_PASSWORD=changeme
+SNOWFLAKE_ROLE=TRANSFORMER
+SNOWFLAKE_DATABASE=CHAKRA
+SNOWFLAKE_WAREHOUSE=COMPUTE_WH
+SNOWFLAKE_SCHEMA=RAW
+```
+
+`README.md`:
+```markdown
+# ELT / Warehouse — dbt + Snowflake
+
+## When to use
+Snowflake is your warehouse. Team writes SQL. No distributed compute needed.
+
+## How to run
+
+```bash
+pip install dbt-snowflake dbt-utils
+cp .env.example .env && source .env
+dbt deps
+dbt debug          # verify connection
+dbt run            # run all models
+dbt test           # run schema tests
+```
+```
+
+- [ ] **Step 4: Create `dbt-bigquery/profiles.yml` and `.env.example`**
+
+`profiles.yml`:
+```yaml
+chakra:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project:  "{{ env_var('GCP_PROJECT') }}"
+      dataset:  "{{ env_var('BQ_DATASET', 'chakra_raw') }}"
+      location: "{{ env_var('BQ_LOCATION', 'US') }}"
+      threads: 4
+      timeout_seconds: 300
+```
+
+`.env.example`:
+```bash
+GCP_PROJECT=my-gcp-project
+BQ_DATASET=chakra_raw
+BQ_LOCATION=US
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+```
+
+`README.md`:
+```markdown
+# ELT / Warehouse — dbt + BigQuery
+
+## When to use
+GCP-first org. BigQuery is your warehouse.
+
+## How to run
+
+```bash
+pip install dbt-bigquery
+gcloud auth application-default login   # or set GOOGLE_APPLICATION_CREDENTIALS
+cp .env.example .env && source .env
+dbt deps && dbt debug && dbt run && dbt test
+```
+```
+
+- [ ] **Step 5: Create `dbt-duckdb-airflow` variant**
+
+`profiles.yml`:
+```yaml
+chakra:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path:    "{{ env_var('DUCKDB_PATH', '/tmp/chakra.duckdb') }}"
+      threads: 4
+```
+
+`dags/dbt_dag.py`:
+```python
+"""
+dbt + DuckDB Airflow DAG
+
+Runs dbt deps → dbt run → dbt test on a daily schedule.
+Uses BashOperator — no Spark cluster required.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+
+DBT_PROJECT_DIR = Path("/opt/airflow/dbt")
+
+default_args = {
+    "owner": "data-engineering",
+    "retries": 1,
+    "retry_delay": timedelta(minutes=2),
+}
+
+with DAG(
+    dag_id="elt_dbt_duckdb",
+    default_args=default_args,
+    description="Daily dbt run against DuckDB",
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    tags=["elt", "dbt", "duckdb"],
+) as dag:
+
+    dbt_deps = BashOperator(
+        task_id="dbt_deps",
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt deps",
+    )
+
+    dbt_run = BashOperator(
+        task_id="dbt_run",
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --target dev",
+    )
+
+    dbt_test = BashOperator(
+        task_id="dbt_test",
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt test --target dev",
+    )
+
+    dbt_deps >> dbt_run >> dbt_test
+```
+
+`docker-compose.yml`:
+```yaml
+version: "3.9"
+
+services:
+  airflow:
+    image: apache/airflow:2.9.3-python3.11
+    command: >
+      bash -c "
+        pip install dbt-duckdb &&
+        airflow db migrate &&
+        airflow standalone
+      "
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-dev-secret}
+      DUCKDB_PATH: /opt/airflow/chakra.duckdb
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - .:/opt/airflow/dbt
+      - airflow-logs:/opt/airflow/logs
+
+volumes:
+  airflow-logs:
+```
+
+`.env.example`:
+```bash
+DUCKDB_PATH=/tmp/chakra.duckdb
+AIRFLOW_SECRET_KEY=dev-secret-change-in-prod
+```
+
+`README.md`:
+```markdown
+# ELT / Warehouse — dbt + DuckDB + Airflow
+
+## When to use
+Cost-sensitive, local/dev, or small-to-medium data. DuckDB runs in-process — no warehouse account needed.
+
+## How to run
+
+```bash
+pip install dbt-duckdb
+cp .env.example .env && source .env
+dbt deps && dbt run && dbt test
+
+# With Airflow scheduling:
+docker compose up -d
+# Airflow UI: http://localhost:8080 — trigger dag `elt_dbt_duckdb`
+```
+```
+
+- [ ] **Step 6: Verify required files for all three ELT variants**
+
+```bash
+for variant in dbt-snowflake dbt-bigquery dbt-duckdb-airflow; do
+  for f in README.md dbt_project.yml profiles.yml .env.example; do
+    path="patterns/elt-warehouse/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+# dbt-duckdb-airflow also needs docker-compose.yml
+[ -f "patterns/elt-warehouse/variants/dbt-duckdb-airflow/docker-compose.yml" ] \
+  || { echo "MISSING: docker-compose.yml"; exit 1; }
+echo "All elt-warehouse variant files present"
+```
+
+Note: `dbt-snowflake` and `dbt-bigquery` have no `docker-compose.yml` (cloud-only).
+The validate-variants CI check (Task 20) exempts cloud-only variants via a marker file `.cloud-only` — create that file in those two variants now:
+
+```bash
+touch patterns/elt-warehouse/variants/dbt-snowflake/.cloud-only
+touch patterns/elt-warehouse/variants/dbt-bigquery/.cloud-only
+# Create placeholder docker-compose.yml so validate-variants passes without the .cloud-only marker
+# Alternative: update validate-variants.yml in Task 20 to skip .cloud-only variants
+```
+
+For simplicity, create a minimal `docker-compose.yml` for cloud variants that prints a message:
+
+`patterns/elt-warehouse/variants/dbt-snowflake/docker-compose.yml`:
+```yaml
+# This variant connects to Snowflake (cloud). No local services required.
+# Set credentials in .env and run: dbt run
+version: "3.9"
+services: {}
+```
+
+`patterns/elt-warehouse/variants/dbt-bigquery/docker-compose.yml` — same content with BigQuery substituted.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add patterns/elt-warehouse/
+git commit -m "feat: elt-warehouse pattern — dbt-snowflake, dbt-bigquery, dbt-duckdb-airflow variants"
+```
+
+---
+
+### Task 14: cdc-pipeline (Pattern README + 2 Variants)
+
+**Files:**
+- Create: `patterns/cdc-pipeline/README.md`
+- Variant `debezium-kafka-flink`: `README.md`, `pom.xml`, `src/`, `config/debezium-connector.json`, `config/init.sql`, `docker-compose.yml`, `.env.example`
+- Variant `debezium-kafka-spark`: `README.md`, `build.sbt`, `src/`, `config/debezium-connector.json`, `config/init.sql`, `docker-compose.yml`, `.env.example`
+
+- [ ] **Step 1: Create `patterns/cdc-pipeline/README.md`**
+
+```markdown
+# CDC Pipeline
+
+Debezium reads the database WAL and streams every committed change to Kafka. A downstream engine
+(Flink or Spark) processes the CDC events and materialises them into a lakehouse.
+
+## Variants
+
+| Variant | Processing engine | Latency | Pull branch |
+|---|---|---|---|
+| `debezium-kafka-flink` | Flink 1.19 (Java) | ~5s | `pattern/cdc-pipeline/debezium-kafka-flink` |
+| `debezium-kafka-spark` | Spark 3.5 Structured Streaming (Scala) | ~30–60s | `pattern/cdc-pipeline/debezium-kafka-spark` |
+
+## Prerequisites
+
+- Docker + Docker Compose (starts PostgreSQL, Kafka, Debezium Connect, and Flink or Spark)
+- Java 17 + Maven 3.9 (debezium-kafka-flink) OR Scala 2.12 + SBT 1.9 (debezium-kafka-spark)
+- PostgreSQL configured with `wal_level=logical` (docker-compose handles this automatically)
+```
+
+- [ ] **Step 2: Create shared `config/debezium-connector.json`** (used by both variants)
+
+```json
+{
+  "name": "orders-source-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "${POSTGRES_USER}",
+    "database.password": "${POSTGRES_PASSWORD}",
+    "database.dbname": "${POSTGRES_DB}",
+    "table.include.list": "public.orders",
+    "topic.prefix": "chakra",
+    "plugin.name": "pgoutput",
+    "slot.name": "debezium_orders_slot",
+    "publication.name": "debezium_orders_pub",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false"
+  }
+}
+```
+
+- [ ] **Step 3: Create shared `config/init.sql`** (PostgreSQL initialisation)
+
+```sql
+-- Create orders table for CDC demo
+CREATE TABLE IF NOT EXISTS orders (
+    order_id     VARCHAR(36)    PRIMARY KEY,
+    customer_id  VARCHAR(36)    NOT NULL,
+    status       VARCHAR(20)    NOT NULL DEFAULT 'pending',
+    amount_cents INTEGER        NOT NULL,
+    placed_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+-- Seed some initial rows
+INSERT INTO orders (order_id, customer_id, status, amount_cents)
+VALUES
+    ('ord-001', 'cust-a', 'pending',   4999),
+    ('ord-002', 'cust-b', 'confirmed', 12999),
+    ('ord-003', 'cust-a', 'shipped',   899)
+ON CONFLICT DO NOTHING;
+```
+
+- [ ] **Step 4: Create `debezium-kafka-flink/src/main/java/io/chakraview/cdc/Main.java`**
+
+```java
+package io.chakraview.cdc;
+
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.enableCheckpointing(30_000, CheckpointingMode.EXACTLY_ONCE);
+
+        // Debezium publishes to <topic.prefix>.<schema>.<table>
+        KafkaSource<String> source = KafkaSource.<String>builder()
+            .setBootstrapServers(System.getenv("KAFKA_BOOTSTRAP_SERVERS"))
+            .setTopics("chakra.public.orders")
+            .setGroupId("flink-cdc-orders")
+            .setStartingOffsets(OffsetsInitializer.earliest())
+            .setValueOnlyDeserializer(new SimpleStringSchema())
+            .build();
+
+        DataStream<String> cdcStream = env.fromSource(
+            source, WatermarkStrategy.noWatermarks(), "debezium-kafka-source"
+        );
+
+        // Parse CDC envelope (after unwrap transform: flat JSON with __deleted field)
+        DataStream<CdcEvent> events = cdcStream.map(new CdcEventParser());
+
+        // Route inserts/updates and deletes separately
+        DataStream<CdcEvent> upserts = events.filter(e -> !e.isDeleted());
+        DataStream<CdcEvent> deletes = events.filter(CdcEvent::isDeleted);
+
+        // Upsert sink — write to Iceberg (or log for local dev)
+        upserts.print("UPSERT");
+        deletes.print("DELETE");
+
+        // TODO: replace print() with FlinkSink.forRow() writing to Iceberg
+        // See streaming-lakehouse/variants/flink-iceberg for the Iceberg sink wiring
+
+        env.execute("cdc-pipeline-flink");
+    }
+}
+```
+
+- [ ] **Step 5: Create `debezium-kafka-flink/src/main/java/io/chakraview/cdc/CdcEvent.java`**
+
+```java
+package io.chakraview.cdc;
+
+public class CdcEvent {
+    public String orderId;
+    public String customerId;
+    public String status;
+    public long   amountCents;
+    public String placedAt;
+    public boolean deleted;
+
+    public boolean isDeleted() { return deleted; }
+
+    @Override
+    public String toString() {
+        return String.format("CdcEvent{orderId=%s, status=%s, deleted=%s}",
+            orderId, status, deleted);
+    }
+}
+```
+
+- [ ] **Step 6: Create `debezium-kafka-flink/src/main/java/io/chakraview/cdc/CdcEventParser.java`**
+
+```java
+package io.chakraview.cdc;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.flink.api.common.functions.MapFunction;
+
+public class CdcEventParser implements MapFunction<String, CdcEvent> {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @Override
+    public CdcEvent map(String json) throws Exception {
+        JsonNode node = MAPPER.readTree(json);
+        CdcEvent event = new CdcEvent();
+        event.orderId     = node.path("order_id").asText();
+        event.customerId  = node.path("customer_id").asText();
+        event.status      = node.path("status").asText();
+        event.amountCents = node.path("amount_cents").asLong();
+        event.placedAt    = node.path("placed_at").asText();
+        // Debezium ExtractNewRecordState adds __deleted = "true" for deletes
+        event.deleted     = "true".equals(node.path("__deleted").asText());
+        return event;
+    }
+}
+```
+
+- [ ] **Step 7: Create `debezium-kafka-flink/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chakra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chakra}
+      POSTGRES_DB: ${POSTGRES_DB:-chakra}
+    command: >
+      postgres
+        -c wal_level=logical
+        -c max_replication_slots=4
+        -c max_wal_senders=4
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chakra"]
+      interval: 10s
+      retries: 5
+
+  kafka:
+    image: bitnami/kafka:3.7.0
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      retries: 5
+
+  kafka-connect:
+    image: debezium/connect:2.7
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: debezium-connect
+      CONFIG_STORAGE_TOPIC: debezium.configs
+      OFFSET_STORAGE_TOPIC: debezium.offsets
+      STATUS_STORAGE_TOPIC: debezium.status
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/connectors"]
+      interval: 15s
+      retries: 8
+
+  flink-jobmanager:
+    image: flink:1.19-java17
+    command: jobmanager
+    ports:
+      - "8082:8081"
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+
+  flink-taskmanager:
+    image: flink:1.19-java17
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4
+
+volumes:
+  postgres-data:
+```
+
+- [ ] **Step 8: Create `.env.example` and `README.md` for debezium-kafka-flink**
+
+`.env.example`:
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+POSTGRES_USER=chakra
+POSTGRES_PASSWORD=chakra
+POSTGRES_DB=chakra
+```
+
+`README.md`:
+```markdown
+# CDC Pipeline — Debezium + Kafka + Flink
+
+## When to use
+Sub-second capture from a live PostgreSQL database. Exactly-once processing downstream.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+# Wait for all services healthy, then register the Debezium connector:
+curl -X POST http://localhost:8083/connectors \
+  -H "Content-Type: application/json" \
+  -d @config/debezium-connector.json
+
+mvn package -DskipTests
+flink run -m localhost:8082 target/cdc-pipeline-flink-iceberg-0.1.0.jar
+
+# Insert a row to trigger a CDC event:
+docker exec -it <postgres-container> psql -U chakra -c \
+  "INSERT INTO orders VALUES ('ord-999','cust-z','pending',100,NOW(),NOW());"
+```
+```
+
+- [ ] **Step 9: Create `debezium-kafka-spark` variant**
+
+`build.sbt`:
+```scala
+ThisBuild / scalaVersion := "2.12.18"
+ThisBuild / version      := "0.1.0"
+ThisBuild / organization := "io.chakraview"
+
+val sparkVersion = "3.5.1"
+val deltaVersion = "3.1.0"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "cdc-pipeline-spark",
+    libraryDependencies ++= Seq(
+      "org.apache.spark" %% "spark-core"           % sparkVersion % "provided",
+      "org.apache.spark" %% "spark-sql"            % sparkVersion % "provided",
+      "org.apache.spark" %% "spark-sql-kafka-0-10" % sparkVersion,
+      "io.delta"         %% "delta-spark"          % deltaVersion,
+      "org.apache.hadoop"  % "hadoop-aws"          % "3.3.6"      % "provided",
+      "com.amazonaws"      % "aws-java-sdk-bundle" % "1.12.262"   % "provided",
+    ),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf"         => MergeStrategy.concat
+      case _                        => MergeStrategy.first
+    },
+  )
+```
+
+`src/main/scala/io/chakraview/cdc/Main.scala`:
+```scala
+package io.chakraview.cdc
+
+import io.delta.tables.DeltaTable
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.streaming.Trigger
+import scala.concurrent.duration._
+
+object Main {
+  private val TablePath =
+    sys.env.getOrElse("DELTA_TABLE_PATH", "s3a://chakra-lakehouse/delta/orders/cdc")
+
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("cdc-pipeline-spark")
+      .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+      .config("spark.sql.catalog.spark_catalog",
+        "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+      .config("spark.hadoop.fs.s3a.endpoint",
+        sys.env.getOrElse("S3_ENDPOINT", "http://localhost:9000"))
+      .config("spark.hadoop.fs.s3a.access.key",
+        sys.env.getOrElse("AWS_ACCESS_KEY_ID", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.secret.key",
+        sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.path.style.access", "true")
+      .config("spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem")
+      .getOrCreate()
+
+    // Debezium publishes flat JSON after ExtractNewRecordState unwrap transform
+    val cdcSchema = CdcSchema.schema
+
+    val raw = spark.readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers",
+        sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+      .option("subscribe", "chakra.public.orders")
+      .option("startingOffsets", "earliest")
+      .load()
+
+    val events = raw
+      .select(from_json(col("value").cast("string"), cdcSchema).alias("d"))
+      .select("d.*")
+
+    val query = events.writeStream
+      .trigger(Trigger.ProcessingTime(60.seconds))
+      .option("checkpointLocation",
+        sys.env.getOrElse("CHECKPOINT_PATH", "s3a://chakra-lakehouse/checkpoints/cdc-orders/"))
+      .foreachBatch { (batch: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row], _: Long) =>
+        if (!batch.isEmpty) {
+          val upserts = batch.filter(col("__deleted") =!= lit("true"))
+          val deletes = batch.filter(col("__deleted") === lit("true"))
+
+          // Apply upserts
+          if (!upserts.isEmpty) {
+            if (!DeltaTable.isDeltaTable(spark, TablePath))
+              upserts.drop("__deleted").write.format("delta").save(TablePath)
+            else
+              DeltaTable.forPath(spark, TablePath)
+                .alias("t")
+                .merge(upserts.drop("__deleted").alias("s"), "t.order_id = s.order_id")
+                .whenMatched().updateAll()
+                .whenNotMatched().insertAll()
+                .execute()
+          }
+
+          // Apply deletes (soft-delete pattern: mark rather than remove)
+          if (!deletes.isEmpty && DeltaTable.isDeltaTable(spark, TablePath)) {
+            DeltaTable.forPath(spark, TablePath)
+              .alias("t")
+              .merge(deletes.alias("s"), "t.order_id = s.order_id")
+              .whenMatched().update(Map("status" -> lit("deleted")))
+              .execute()
+          }
+        }
+      }
+      .start()
+
+    query.awaitTermination()
+  }
+}
+```
+
+`src/main/scala/io/chakraview/cdc/CdcSchema.scala`:
+```scala
+package io.chakraview.cdc
+
+import org.apache.spark.sql.types._
+
+object CdcSchema {
+  val schema: StructType = StructType(Seq(
+    StructField("order_id",    StringType,    nullable = false),
+    StructField("customer_id", StringType,    nullable = true),
+    StructField("status",      StringType,    nullable = true),
+    StructField("amount_cents",LongType,      nullable = true),
+    StructField("placed_at",   TimestampType, nullable = true),
+    StructField("updated_at",  TimestampType, nullable = true),
+    StructField("__deleted",   StringType,    nullable = true),
+  ))
+}
+```
+
+The `docker-compose.yml` for `debezium-kafka-spark` is the same as `debezium-kafka-flink` but without the Flink services. MinIO is added for the Delta Lake sink:
+
+```yaml
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chakra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chakra}
+      POSTGRES_DB: ${POSTGRES_DB:-chakra}
+    command: postgres -c wal_level=logical -c max_replication_slots=4 -c max_wal_senders=4
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chakra"]
+      interval: 10s
+      retries: 5
+
+  kafka:
+    image: bitnami/kafka:3.7.0
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  kafka-connect:
+    image: debezium/connect:2.7
+    depends_on: [kafka, postgres]
+    ports: ["8083:8083"]
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: debezium-connect
+      CONFIG_STORAGE_TOPIC: debezium.configs
+      OFFSET_STORAGE_TOPIC: debezium.offsets
+      STATUS_STORAGE_TOPIC: debezium.status
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+volumes:
+  postgres-data:
+  minio-data:
+```
+
+`.env.example`:
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+POSTGRES_USER=chakra
+POSTGRES_PASSWORD=chakra
+POSTGRES_DB=chakra
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+DELTA_TABLE_PATH=s3a://chakra-lakehouse/delta/orders/cdc
+CHECKPOINT_PATH=s3a://chakra-lakehouse/checkpoints/cdc-orders/
+```
+
+`README.md`:
+```markdown
+# CDC Pipeline — Debezium + Kafka + Spark
+
+## When to use
+CDC capture with Spark processing. Latency > 30s acceptable. Team already knows Spark.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+curl -X POST http://localhost:8083/connectors \
+  -H "Content-Type: application/json" \
+  -d @config/debezium-connector.json
+sbt assembly
+spark-submit --class io.chakraview.cdc.Main --master local[*] \
+  target/scala-2.12/cdc-pipeline-spark-assembly-0.1.0.jar
+```
+```
+
+- [ ] **Step 10: Verify required files**
+
+```bash
+for variant in debezium-kafka-flink debezium-kafka-spark; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/cdc-pipeline/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All cdc-pipeline variant files present"
+```
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add patterns/cdc-pipeline/
+git commit -m "feat: cdc-pipeline pattern — debezium-kafka-flink (Java) and debezium-kafka-spark (Scala) variants"
+```
+
+---
+
+### Task 15: lambda-architecture (Pattern README + 2 Variants)
+
+**Files:**
+- Create: `patterns/lambda-architecture/README.md`
+- Variant `flink-spark-iceberg`: `streaming/` (Java Flink job) + `batch/` (Scala Spark job) + `docker-compose.yml` + `.env.example` + `README.md`
+- Variant `spark-streaming-batch-delta`: `streaming/` (Scala Spark Streaming) + `batch/` (Scala Spark Batch) + `docker-compose.yml` + `.env.example` + `README.md`
+
+- [ ] **Step 1: Create `patterns/lambda-architecture/README.md`**
+
+```markdown
+# Lambda Architecture
+
+Two parallel paths — streaming (low latency, approximate) and batch (high latency, accurate) —
+merged at query time. Use only when both are genuinely required by different stakeholders.
+
+## Variants
+
+| Variant | Streaming engine | Batch engine | Table format | Pull branch |
+|---|---|---|---|---|
+| `flink-spark-iceberg` | Flink 1.19 (Java) | Spark 3.5 (Scala) | Iceberg 1.5 | `pattern/lambda-architecture/flink-spark-iceberg` |
+| `spark-streaming-batch-delta` | Spark 3.5 Structured Streaming (Scala) | Spark 3.5 Batch (Scala) | Delta 3.1 | `pattern/lambda-architecture/spark-streaming-batch-delta` |
+
+## Merge strategy
+
+Both paths write to the same Iceberg/Delta table with a `path` column: `streaming` or `batch`.
+At query time, Iceberg time travel or Delta's versioning lets analysts choose the freshest streaming
+snapshot OR the latest batch-corrected snapshot. The serving layer queries the batch path for
+reporting and the streaming path for real-time dashboards.
+
+## Warning
+
+Lambda doubles your operational surface: two pipelines, two sets of SLAs, two codebases.
+Before committing, validate that a single streaming path (Streaming Lakehouse pattern) cannot
+meet your requirements.
+```
+
+- [ ] **Step 2: Create `flink-spark-iceberg/streaming/` — Flink job (same idiom as streaming-lakehouse flink-iceberg)**
+
+`streaming/pom.xml` — same as `streaming-lakehouse/variants/flink-iceberg/pom.xml` with `artifactId` changed to `lambda-streaming-flink-iceberg`.
+
+`streaming/src/main/java/io/chakraview/lambda/StreamingJob.java`:
+```java
+package io.chakraview.lambda;
+
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.types.Row;
+
+// Streaming path: low-latency approximate results written to Iceberg with path="streaming"
+public class StreamingJob {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.enableCheckpointing(30_000, CheckpointingMode.EXACTLY_ONCE);
+
+        KafkaSource<String> source = KafkaSource.<String>builder()
+            .setBootstrapServers(System.getenv("KAFKA_BOOTSTRAP_SERVERS"))
+            .setTopics("events.orders")
+            .setGroupId("lambda-streaming-flink")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new SimpleStringSchema())
+            .build();
+
+        DataStream<String> stream = env.fromSource(
+            source, WatermarkStrategy.noWatermarks(), "kafka-orders");
+
+        // Tag all rows with path="streaming" before writing to shared Iceberg table
+        DataStream<Row> rows = stream
+            .map(new EventParser())
+            .map(row -> { row.setField(5, "streaming"); return row; });
+
+        // Wire FlinkSink to Iceberg table (same wiring as streaming-lakehouse/flink-iceberg)
+        // Table schema must include path VARCHAR column
+        rows.print("streaming-path");
+
+        env.execute("lambda-streaming-flink");
+    }
+}
+```
+
+- [ ] **Step 3: Create `flink-spark-iceberg/batch/` — Spark batch job**
+
+`batch/build.sbt` — same as `batch-lakehouse/variants/spark-iceberg/build.sbt` with `name` changed to `lambda-batch-spark-iceberg`.
+
+`batch/src/main/scala/io/chakraview/lambda/BatchJob.scala`:
+```scala
+package io.chakraview.lambda
+
+import io.chakraview.lakehouse.{IcebergWriter, SparkSessions}
+import org.apache.spark.sql.functions._
+
+// Batch path: high-accuracy results written to same Iceberg table with path="batch"
+object BatchJob {
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSessions.iceberg("lambda-batch-spark-iceberg")
+    import spark.implicits._
+
+    val source = spark.read
+      .option("header", "true")
+      .option("inferSchema", "true")
+      .csv("s3a://chakra-lakehouse/raw/orders/")
+
+    val transformed = source
+      .withColumn("processed_at", current_timestamp())
+      .withColumn("amount_usd",   col("amount_cents").divide(100.0))
+      .withColumn("path",         lit("batch"))
+      .filter(col("order_id").isNotNull)
+
+    // Overwrite the batch partition; streaming partition is untouched
+    spark.sql(s"""
+      DELETE FROM lakehouse.orders.events WHERE path = 'batch'
+    """)
+    IcebergWriter.append(transformed, "lakehouse.orders.events")
+
+    println(s"Batch path updated: ${transformed.count()} rows")
+    spark.stop()
+  }
+}
+```
+
+- [ ] **Step 4: Create `flink-spark-iceberg/docker-compose.yml`**
+
+Same as `streaming-lakehouse/variants/flink-iceberg/docker-compose.yml` (Kafka + Flink + MinIO + Iceberg REST). Copy it verbatim.
+
+- [ ] **Step 5: Create `flink-spark-iceberg/.env.example`**
+
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+ICEBERG_REST_URI=http://localhost:8181
+LAKEHOUSE_WAREHOUSE=s3://chakra-lakehouse/
+```
+
+- [ ] **Step 6: Create `flink-spark-iceberg/README.md`**
+
+```markdown
+# Lambda Architecture — Flink (streaming) + Spark (batch) + Iceberg
+
+## When to use
+Stakeholders need both real-time approximate results AND nightly corrected results,
+and they genuinely cannot agree on one.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+
+# Start streaming path (Flink)
+cd streaming && mvn package -DskipTests
+flink run -m localhost:8082 target/lambda-streaming-flink-iceberg-0.1.0.jar
+
+# Run batch path (Spark, scheduled via cron or Airflow)
+cd ../batch && sbt assembly
+spark-submit --class io.chakraview.lambda.BatchJob --master local[*] \
+  target/scala-2.12/lambda-batch-spark-iceberg-assembly-0.1.0.jar
+```
+
+Query both paths in DuckDB:
+```sql
+-- Streaming results (fresh, approximate)
+SELECT * FROM iceberg_scan('s3://chakra-lakehouse/...') WHERE path = 'streaming';
+
+-- Batch results (accurate, up to 1h old)
+SELECT * FROM iceberg_scan('s3://chakra-lakehouse/...') WHERE path = 'batch';
+```
+```
+
+- [ ] **Step 7: Create `spark-streaming-batch-delta` variant**
+
+`streaming/build.sbt` — same as `streaming-lakehouse/variants/spark-delta/build.sbt` with name `lambda-streaming-spark-delta`.
+
+`streaming/src/main/scala/io/chakraview/lambda/StreamingJob.scala`:
+```scala
+package io.chakraview.lambda
+
+import io.delta.tables.DeltaTable
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.streaming.Trigger
+import scala.concurrent.duration._
+
+object StreamingJob {
+  private val TablePath =
+    sys.env.getOrElse("DELTA_TABLE_PATH", "s3a://chakra-lakehouse/delta/orders/lambda")
+
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("lambda-streaming-spark-delta")
+      .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+      .config("spark.sql.catalog.spark_catalog",
+        "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+      .config("spark.hadoop.fs.s3a.endpoint",
+        sys.env.getOrElse("S3_ENDPOINT", "http://localhost:9000"))
+      .config("spark.hadoop.fs.s3a.access.key",
+        sys.env.getOrElse("AWS_ACCESS_KEY_ID", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.secret.key",
+        sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.path.style.access", "true")
+      .config("spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem")
+      .getOrCreate()
+
+    val raw = spark.readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers",
+        sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+      .option("subscribe", "events.orders")
+      .option("startingOffsets", "latest")
+      .load()
+
+    import spark.implicits._
+    val orders = raw
+      .select(from_json(col("value").cast("string"), EventSchema.schema).alias("d"))
+      .select("d.*")
+      .withColumn("path", lit("streaming"))
+
+    orders.writeStream
+      .trigger(Trigger.ProcessingTime(60.seconds))
+      .option("checkpointLocation",
+        sys.env.getOrElse("CHECKPOINT_PATH", "s3a://chakra-lakehouse/checkpoints/lambda-streaming/"))
+      .foreachBatch { (batch: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row], _: Long) =>
+        if (!batch.isEmpty) {
+          if (!DeltaTable.isDeltaTable(spark, TablePath))
+            batch.write.format("delta").partitionBy("path").save(TablePath)
+          else
+            batch.write.format("delta").mode("append").save(TablePath)
+        }
+      }
+      .start()
+      .awaitTermination()
+  }
+}
+```
+
+`batch/build.sbt` — same as `batch-lakehouse/variants/spark-delta/build.sbt` with name `lambda-batch-spark-delta`.
+
+`batch/src/main/scala/io/chakraview/lambda/BatchJob.scala`:
+```scala
+package io.chakraview.lambda
+
+import io.delta.tables.DeltaTable
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
+
+object BatchJob {
+  private val TablePath =
+    sys.env.getOrElse("DELTA_TABLE_PATH", "s3a://chakra-lakehouse/delta/orders/lambda")
+
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("lambda-batch-spark-delta")
+      .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+      .config("spark.sql.catalog.spark_catalog",
+        "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+      .config("spark.hadoop.fs.s3a.endpoint",
+        sys.env.getOrElse("S3_ENDPOINT", "http://localhost:9000"))
+      .config("spark.hadoop.fs.s3a.access.key",
+        sys.env.getOrElse("AWS_ACCESS_KEY_ID", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.secret.key",
+        sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.path.style.access", "true")
+      .config("spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem")
+      .getOrCreate()
+
+    val source = spark.read
+      .option("header", "true").option("inferSchema", "true")
+      .csv("s3a://chakra-lakehouse/raw/orders/")
+
+    val accurate = source
+      .withColumn("processed_at", current_timestamp())
+      .withColumn("amount_usd",   col("amount_cents").divide(100.0))
+      .withColumn("path",         lit("batch"))
+      .filter(col("order_id").isNotNull)
+
+    // Overwrite only the batch partition
+    accurate.write.format("delta")
+      .mode("overwrite")
+      .option("replaceWhere", "path = 'batch'")
+      .save(TablePath)
+
+    println(s"Batch path refreshed: ${accurate.count()} rows")
+    spark.stop()
+  }
+}
+```
+
+`docker-compose.yml` — Kafka + MinIO (Spark runs locally for both streaming and batch):
+```yaml
+version: "3.9"
+
+services:
+  kafka:
+    image: bitnami/kafka:3.7.0
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+volumes:
+  minio-data:
+```
+
+`.env.example`:
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+DELTA_TABLE_PATH=s3a://chakra-lakehouse/delta/orders/lambda
+CHECKPOINT_PATH=s3a://chakra-lakehouse/checkpoints/lambda-streaming/
+```
+
+`README.md`:
+```markdown
+# Lambda Architecture — Spark Streaming + Spark Batch + Delta Lake
+
+## When to use
+Single Spark team that needs both streaming and batch, with Delta as the unifying format.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+
+# Streaming path (continuous):
+cd streaming && sbt assembly
+spark-submit --class io.chakraview.lambda.StreamingJob --master local[*] \
+  target/scala-2.12/lambda-streaming-spark-delta-assembly-0.1.0.jar &
+
+# Batch path (scheduled):
+cd ../batch && sbt assembly
+spark-submit --class io.chakraview.lambda.BatchJob --master local[*] \
+  target/scala-2.12/lambda-batch-spark-delta-assembly-0.1.0.jar
+```
+```
+
+- [ ] **Step 8: Verify required files**
+
+```bash
+for variant in flink-spark-iceberg spark-streaming-batch-delta; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/lambda-architecture/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All lambda-architecture variant files present"
+```
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add patterns/lambda-architecture/
+git commit -m "feat: lambda-architecture pattern — flink-spark-iceberg and spark-streaming-batch-delta variants"
+```
+
+---
+
+*Tasks 16–20 continue in the next batch.*
