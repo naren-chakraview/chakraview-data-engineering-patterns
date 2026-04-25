@@ -989,4 +989,1003 @@ git commit -m "docs: ADR-0001 pattern matrix structure, ADR-0002 language conven
 
 ---
 
-*Tasks 6–10 continue in the next batch.*
+---
+
+## Tasks 6–10
+
+---
+
+### Task 6: ADRs 0003 and 0004
+
+**Files:**
+- Create: `docs/adrs/ADR-0003-table-format-landscape.md`
+- Create: `docs/adrs/ADR-0004-stream-processing-engine.md`
+
+- [ ] **Step 1: Write `docs/adrs/ADR-0003-table-format-landscape.md`**
+
+```markdown
+# ADR-0003: Table Format Landscape — Iceberg vs Delta Lake vs Hudi
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+The lakehouse pattern requires an open table format that adds ACID transactions, schema evolution, and time travel on top of object storage (S3, GCS, ADLS). Three formats compete: Apache Iceberg, Delta Lake, and Apache Hudi. Each variant in this repo that writes a lakehouse table must choose one.
+
+The formats share a core capability: they track table state in a metadata layer (a manifest or transaction log) above Parquet/ORC data files, so that a commit is atomic, readers see a consistent snapshot, and historical versions remain queryable.
+
+Their differences are most visible at the edges: multi-engine interoperability, schema evolution breadth, upsert performance, and governance model.
+
+## Decision
+
+**Default to Apache Iceberg.** Use Delta Lake only in Databricks-primary stacks. Do not use Hudi unless the workload is dominated by record-level upserts at very high update rates.
+
+## Rationale
+
+### Iceberg
+
+Iceberg's primary advantage is portability. An Iceberg table written by Spark is readable by Flink, Trino, Presto, Dremio, StarRocks, DuckDB, and AWS Athena — with no conversion or copy. This interoperability is built into the spec, not an afterthought.
+
+Iceberg supports full schema evolution: add, drop, rename, and reorder columns without rewriting data files. Column IDs (not names) are used to track fields, so renaming a column does not break readers that pinned to the old name.
+
+Iceberg's snapshot isolation model gives readers a consistent point-in-time view even as writers commit new data. Time travel is available to any engine that can read Iceberg metadata.
+
+Weakness: Iceberg's REST catalog and Glue/Hive metastore integrations require configuration. The first-time setup is more involved than Delta (which self-bootstraps on any Spark cluster with the Delta JAR).
+
+### Delta Lake
+
+Delta's primary advantage is Spark integration depth. The `DeltaTable` API for MERGE, UPDATE, and DELETE is the most ergonomic in the ecosystem. Databricks manages the Delta catalog natively; no external metastore required.
+
+Delta's transaction log (JSON + Parquet checkpoint files) is simpler than Iceberg's manifest hierarchy, which makes debugging easier for Spark-only teams.
+
+Weakness: multi-engine support is improving (Flink and Trino connectors exist) but lags Iceberg. A Delta table written by Spark cannot be queried by Trino without additional setup and version negotiation.
+
+### Hudi
+
+Hudi's primary advantage is upsert performance. Its Copy-on-Write and Merge-on-Read storage types are optimised for high-rate record-level updates — the case where a CDC pipeline updates millions of rows per hour in a wide table. Hudi's record-level index can apply upserts without a full file scan.
+
+Weakness: Hudi's Flink support is partial. Its multi-engine story is narrower than Iceberg. The upsert optimisation that justifies Hudi is not relevant for append-only or batch-overwrite workloads (most lakehouse batch patterns).
+
+## Consequences
+
+**Positive:**
+- Iceberg boilerplates work with Trino, Presto, and any other Iceberg-capable engine out of the box.
+- Delta boilerplates work seamlessly in Databricks and with the full `DeltaTable` Scala API.
+- Pattern branches deliver a format that matches the team's engine choice.
+
+**Negative:**
+- Teams on Databricks who pull an Iceberg boilerplate will need to configure the Iceberg catalog — Delta would have been simpler for them.
+- Teams who need Hudi's upsert performance must adapt an Iceberg or Delta boilerplate, as no Hudi variant is provided.
+
+## When this choice stops being correct
+
+If Hudi achieves full Flink support and Trino/Presto parity with Iceberg, it becomes worth adding Hudi variants for CDC-heavy patterns. Revisit if Hudi's upsert performance advantage closes the gap on Iceberg's MERGE INTO with equality delete files.
+
+## Alternatives considered
+
+**Hudi as default:** Rejected. Hudi's multi-engine support is narrower and its advantage (upsert rate) is irrelevant for the majority of lakehouse batch and streaming patterns.
+
+**Delta as default:** Rejected. Delta's Trino/Presto story is weaker, and lock-in to Databricks is a cost we do not want to impose on engineers pulling a boilerplate.
+```
+
+- [ ] **Step 2: Write `docs/adrs/ADR-0004-stream-processing-engine.md`**
+
+```markdown
+# ADR-0004: Stream Processing Engine — Flink vs Spark Structured Streaming
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+The streaming lakehouse and CDC pipeline patterns require a stream processing engine. Two engines dominate the open-source landscape: Apache Flink and Apache Spark Structured Streaming. Both offer Kafka integration, exactly-once semantics, and lakehouse sink connectors. Both are used in production at scale.
+
+Each streaming variant in this repo uses one engine. The choice must be justified so engineers know when to reach for each.
+
+## Decision
+
+**Use Flink for variants where sub-minute latency or native event-time semantics are primary requirements. Use Spark Structured Streaming for variants where team familiarity with Spark is the primary constraint and latency > 30 seconds is acceptable.**
+
+## Rationale
+
+### Flink
+
+Flink processes each event as it arrives. Its watermark mechanism is native to the execution model — event-time windows, out-of-order event handling, and late data routing to a side output are first-class primitives, not workarounds.
+
+Flink's exactly-once guarantee is implemented through two-phase commit: the Flink checkpoint (RocksDB state snapshot) and the sink commit are atomic. For Iceberg, this means data files are committed to the table only on checkpoint, ensuring no partial writes are visible to readers.
+
+Flink's stateful processing (keyed streams, ValueState, ListState, MapState) is designed for long-running jobs with large state stores. RocksDB state backend keeps state on local disk with off-heap memory, making terabyte-scale state viable.
+
+Weakness: Flink requires a cluster (JobManager + TaskManagers), adds Kafka operational overhead, and its Java API requires more boilerplate than Spark's DataFrame API.
+
+### Spark Structured Streaming
+
+Spark Structured Streaming uses micro-batches (configurable trigger interval, minimum ~100ms in practice, typically 30–60s for lakehouse writes). The DataFrame/Dataset API is consistent between batch and streaming — engineers who know Spark batch can read Structured Streaming code.
+
+`foreachBatch` allows arbitrary DataFrame operations on each micro-batch, including Delta MERGE and Iceberg MERGE INTO. This makes it easier to implement upsert patterns without native streaming-sink APIs.
+
+Weakness: true event-time processing in Structured Streaming requires watermarks on the streaming DataFrame, and late data handling is less granular than Flink's per-event routing. Micro-batch latency floors at ~30 seconds for Iceberg/Delta writes in practice (file commit overhead).
+
+## Consequences
+
+**Positive:**
+- Flink variants demonstrate the highest-fidelity streaming pattern: exactly-once, event-time, per-event processing.
+- Spark Structured Streaming variants are accessible to the larger Spark-fluent engineer population.
+- The two variants within the streaming lakehouse pattern make the trade-off explicit rather than hiding it behind a single implementation.
+
+**Negative:**
+- Maintaining boilerplates in two different languages (Java for Flink, Scala for Spark) increases surface area.
+- An engineer who picks the Spark Structured Streaming variant and later needs < 30s latency must migrate to Flink — the boilerplate does not help with that migration.
+
+## When this choice stops being correct
+
+If Spark Structured Streaming achieves sub-10-second commit latency for Iceberg/Delta sinks (through asynchronous commits or a new execution model), the latency argument for Flink weakens. Revisit if Structured Streaming adds true per-event watermarking.
+
+## Alternatives considered
+
+**Kafka Streams:** Rejected. Kafka Streams is a library, not a cluster-based engine. It does not support lakehouse sinks and is not suitable for the data volumes targeted by these patterns.
+
+**Apache Beam:** Rejected. Beam's portability across runners (Flink, Spark, Dataflow) is valuable for cloud-portability, but adds an abstraction layer that obscures the idiomatic API of each engine. A Beam boilerplate teaches Beam, not Flink or Spark.
+```
+
+- [ ] **Step 3: Verify MkDocs builds**
+
+```bash
+mkdocs build --strict 2>&1 | grep -E "(ERROR|built successfully)"
+```
+
+Expected: `INFO - Documentation built successfully.`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add docs/adrs/ADR-0003-table-format-landscape.md \
+        docs/adrs/ADR-0004-stream-processing-engine.md
+git commit -m "docs: ADR-0003 table format landscape, ADR-0004 stream processing engine"
+```
+
+---
+
+### Task 7: ADRs 0005 and 0006
+
+**Files:**
+- Create: `docs/adrs/ADR-0005-orchestration-landscape.md`
+- Create: `docs/adrs/ADR-0006-lakehouse-storage-layer.md`
+
+- [ ] **Step 1: Write `docs/adrs/ADR-0005-orchestration-landscape.md`**
+
+```markdown
+# ADR-0005: Orchestration Landscape — Airflow vs Prefect vs Dagster vs Temporal
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+Three patterns in this repo include an orchestrated variant: batch-lakehouse (Spark + Airflow), ELT warehouse (dbt + DuckDB + Airflow), and ML feature pipeline (Feast + Spark + Airflow). The workflow-orchestration pattern covers all three orchestrators as independent boilerplates.
+
+A decision must be made about which orchestrators to include and how to characterise each.
+
+## Decision
+
+Include **Airflow, Prefect, and Dagster** as orchestration variants. Do not include Temporal as a data pipeline orchestrator.
+
+## Rationale
+
+### Airflow
+
+Airflow is the most widely deployed data pipeline orchestrator. Its provider ecosystem (600+ operators covering every cloud service, database, and processing engine) means that most integration questions are already solved. Engineers joining a team that uses Airflow will encounter it at scale.
+
+Airflow's DAG model (a Python file that defines a directed acyclic graph of operators) is explicit and auditable. DAGs are versioned in Git. The scheduler, workers, and webserver are operationally mature and well-documented.
+
+Weakness: Airflow's DAG parsing model (re-imports every file on each scheduler tick) creates performance problems at large scale. Dynamic task generation (generating tasks at runtime based on data) is possible but verbose compared to Prefect.
+
+### Prefect
+
+Prefect's primary differentiator is Python ergonomics. A Prefect flow is a Python function decorated with `@flow`; tasks are functions decorated with `@task`. Dynamic task creation (calling a task in a loop) is idiomatic Python, not a special API. Prefect's UI (Prefect Cloud or self-hosted server) has a modern developer experience.
+
+Prefect's deployment model (work pools, workers, deployments) is more flexible than Airflow's worker model — the same flow can run locally, on Kubernetes, or on a cloud provider without code changes.
+
+Weakness: Prefect's provider ecosystem is narrower than Airflow's. For uncommon integrations, you write Python code directly rather than using a pre-built operator.
+
+### Dagster
+
+Dagster's primary differentiator is asset-centric thinking. A Dagster software-defined asset (SDA) represents a data artifact (a table, a file, an ML model) and its computation. The asset graph shows lineage — which assets depend on which — and the scheduler materialises assets on demand or on a cron schedule.
+
+Dagster's observability is the strongest of the three: each asset materialisation records metadata (row counts, schema, custom metrics), and the UI shows asset health over time.
+
+Weakness: Dagster's asset model requires a mindset shift from task-centric orchestration. Engineers who think in "jobs" rather than "data assets" find the learning curve steeper.
+
+### Temporal
+
+Temporal is a durable workflow engine for long-running business processes (order fulfilment, payment processing, human-in-the-loop approvals). It is not designed for data pipeline orchestration — it has no data-aware scheduling, no DAG visualisation, and no concept of data assets or freshness SLAs. Including Temporal would mislead engineers looking for a data pipeline orchestrator.
+
+## Consequences
+
+**Positive:**
+- Three orchestrator variants give engineers a concrete comparison across the key dimensions: ecosystem breadth (Airflow), Python ergonomics (Prefect), and asset observability (Dagster).
+- The orchestrated pattern variants (batch-lakehouse + Airflow, ELT + Airflow) demonstrate integration with the most commonly deployed orchestrator.
+
+**Negative:**
+- Airflow is used in the integrated variants (batch-lakehouse, ELT) but Prefect and Dagster are only in the standalone orchestration pattern. Engineers who prefer Prefect/Dagster must adapt the integrated variants themselves.
+
+## When this choice stops being correct
+
+If Prefect or Dagster achieves Airflow's provider ecosystem breadth (600+ pre-built integrations), the default for integrated variants should be revisited. Revisit also if Temporal adds data pipeline primitives (freshness SLAs, asset lineage, SQL-level observability).
+
+## Alternatives considered
+
+**Luigi:** Rejected. Luigi is effectively unmaintained and has been superseded by Airflow and Prefect in every dimension.
+
+**Argo Workflows:** Rejected. Argo is a Kubernetes-native workflow engine with a YAML-first authoring model. It is a valid orchestrator for Kubernetes-heavy shops but outside the data pipeline mainstream.
+```
+
+- [ ] **Step 2: Write `docs/adrs/ADR-0006-lakehouse-storage-layer.md`**
+
+```markdown
+# ADR-0006: Lakehouse Storage Layer — Open Table Formats over Managed Warehouses
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+The batch lakehouse, streaming lakehouse, CDC pipeline, lambda architecture, ML feature pipeline, and federated query patterns all require a durable storage layer for processed data. The two primary options are:
+
+1. **Open table formats on object storage** (Iceberg/Delta/Hudi on S3/GCS/ADLS)
+2. **Managed cloud warehouses** (Snowflake, BigQuery, Redshift, Azure Synapse)
+
+The ELT/warehouse pattern explicitly targets managed warehouses. All other patterns in this repo target open table formats.
+
+## Decision
+
+Use **open table formats on object storage** (primarily Iceberg, secondarily Delta) for all patterns except ELT/warehouse, which uses dbt against managed warehouses by design.
+
+## Rationale
+
+**Cost at scale:** Object storage (S3, GCS) costs $0.023/GB-month. Snowflake and BigQuery storage costs are 5–20× higher. For a patterns repo that demonstrates scale-oriented architectures, the default storage choice should not introduce a cost cliff.
+
+**Engine portability:** Iceberg/Delta tables on object storage are readable by any compatible engine (Trino, Presto, Spark, Flink, Athena, DuckDB). A managed warehouse's storage is readable only through that warehouse's query engine. An Iceberg table written by a Flink boilerplate can be queried locally with DuckDB, validated in CI with a minimal test, and queried at scale with Trino — without paying warehouse compute costs.
+
+**No vendor account required to run locally:** An engineer pulling a boilerplate can run `docker compose up` and have a working local stack with MinIO (S3-compatible), an Iceberg REST catalog, and a Spark or Flink cluster. No Snowflake trial account, no GCP billing enabled.
+
+**Separation of storage and compute:** Object storage + open table format is the separation-of-storage-and-compute architecture in its purest form. Compute can be swapped (Spark → Trino → Athena) without touching the data.
+
+## Consequences
+
+**Positive:**
+- Engineers can run every boilerplate locally with Docker Compose and MinIO.
+- Data written by one pattern boilerplate is readable by another (e.g., the federated-query boilerplate can query tables written by the batch-lakehouse boilerplate).
+- No cloud billing required to evaluate the boilerplate.
+
+**Negative:**
+- Local docker-compose stacks are heavier than connecting to a managed warehouse. The Flink + Kafka + MinIO + Iceberg REST stack requires ~6GB RAM.
+- Engineers who are Snowflake or BigQuery shops must adapt the boilerplate to write to their warehouse. The ELT/warehouse pattern covers this case, but the other patterns do not.
+
+## When this choice stops being correct
+
+If a managed warehouse introduces a free local emulator (as DuckDB does for in-process analytics), it becomes viable to include that warehouse as a storage variant for batch patterns. DuckDB is already included as an ELT/warehouse variant for this reason.
+
+## Alternatives considered
+
+**Redshift as default storage:** Rejected. Redshift requires an AWS account and introduces per-node costs even at the smallest scale. Object storage is strictly cheaper and more portable.
+
+**Delta on Azure ADLS as default:** Rejected. ADLS is cloud-specific. MinIO is S3-compatible and runs locally without any cloud account.
+```
+
+- [ ] **Step 3: Verify MkDocs builds**
+
+```bash
+mkdocs build --strict 2>&1 | grep -E "(ERROR|built successfully)"
+```
+
+Expected: `INFO - Documentation built successfully.`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add docs/adrs/ADR-0005-orchestration-landscape.md \
+        docs/adrs/ADR-0006-lakehouse-storage-layer.md
+git commit -m "docs: ADR-0005 orchestration landscape, ADR-0006 lakehouse storage layer"
+```
+
+---
+
+### Task 8: ADRs 0007 and 0008
+
+**Files:**
+- Create: `docs/adrs/ADR-0007-cdc-tooling.md`
+- Create: `docs/adrs/ADR-0008-local-dev-approach.md`
+
+- [ ] **Step 1: Write `docs/adrs/ADR-0007-cdc-tooling.md`**
+
+```markdown
+# ADR-0007: CDC Tooling — Debezium Primary, Airbyte as Managed Alternative
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+The CDC pipeline pattern captures database changes in real time and streams them into a processing engine. Two tool categories are available:
+
+1. **Log-based CDC** (Debezium): reads the database's write-ahead log (WAL) directly. Sub-second capture latency, zero impact on source database query performance.
+2. **Query-based CDC / managed ELT** (Airbyte, Fivetran, Stitch): polls the source database on a schedule or uses database triggers. Simpler setup, higher source load, higher latency.
+
+## Decision
+
+Use **Debezium** as the primary CDC tool in all CDC pipeline boilerplates. Document **Airbyte** as the managed alternative in the pattern README and ADR, but do not provide an Airbyte boilerplate variant.
+
+## Rationale
+
+### Debezium
+
+Debezium reads the PostgreSQL WAL (or MySQL binlog, MongoDB oplog, etc.) via the replication protocol. Every committed transaction appears in the Debezium Kafka topic within milliseconds of the source commit. There is no polling interval — the capture latency is bounded by network and Kafka producer throughput, not a schedule.
+
+Debezium's Kafka Connect integration means the connector runs as a Kafka Connect worker, scales horizontally, and produces Avro-serialised events to Kafka topics compatible with any downstream consumer (Flink, Spark, ksqlDB, etc.).
+
+Debezium is the de facto standard for WAL-based CDC in the open-source ecosystem. Engineers encountering CDC in production will almost certainly encounter Debezium.
+
+### Airbyte
+
+Airbyte is a managed ELT platform that includes 300+ pre-built connectors. For databases that do not support WAL-based replication (e.g., legacy MySQL without GTID, some hosted databases), Airbyte's query-based CDC or full-table replication is the practical alternative.
+
+Airbyte's operational model (a web UI, a platform API, managed connectors) is significantly simpler than operating a Kafka Connect cluster with Debezium. For teams that cannot operate Kafka, Airbyte is the right choice.
+
+Weakness: Airbyte is not truly log-based — most connectors use cursor-based or full-table replication. Capture latency is minutes, not milliseconds. Airbyte is not a substitute for Debezium when sub-minute freshness is required.
+
+## Consequences
+
+**Positive:**
+- Debezium boilerplates teach the WAL-based CDC model, which is the most operationally demanding and most commonly encountered in production data platforms.
+- The pattern README explains when Airbyte is the right alternative, so engineers who cannot operate Kafka are not left without guidance.
+
+**Negative:**
+- Engineers who need Airbyte must build their own boilerplate from the pattern README guidance.
+- Debezium requires PostgreSQL configured with `wal_level = logical`. The docker-compose.yml handles this for local dev, but production source databases may require a DBA to enable it.
+
+## When this choice stops being correct
+
+If Debezium releases a managed cloud offering (hosted Debezium) that removes the Kafka Connect operational burden, the gap between Debezium and Airbyte closes. Similarly, if Airbyte achieves sub-second latency via a true log-based connector, the distinction collapses.
+
+## Alternatives considered
+
+**Maxwell's Daemon:** Rejected. Maxwell is MySQL-only and less actively maintained than Debezium.
+
+**AWS DMS (Database Migration Service):** Rejected. Cloud-specific, requires an AWS account, not portable to local dev.
+
+**Kafka Connect without Debezium (using JDBC Source Connector):** Rejected. The JDBC Source Connector is query-based (polling), not log-based. It cannot produce the change event envelope (before/after state) that makes CDC useful for upsert pipelines.
+```
+
+- [ ] **Step 2: Write `docs/adrs/ADR-0008-local-dev-approach.md`**
+
+```markdown
+# ADR-0008: Local Dev Approach — Docker Compose Per Variant
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+Every boilerplate variant must be runnable locally so that an engineer can validate the pattern before committing to a production deployment. The local dev stack must be self-contained, require no cloud account, and start with a single command.
+
+Three approaches exist:
+
+1. **Docker Compose per variant** — each variant ships its own `docker-compose.yml` that starts exactly the services needed for that variant.
+2. **Shared Docker Compose at repo root** — one `docker-compose.yml` with all services, profiles to enable subsets.
+3. **Dev container / Codespaces** — a `.devcontainer/` configuration that provisions a cloud development environment.
+
+## Decision
+
+Use **Docker Compose per variant**. Each variant's `docker-compose.yml` starts the minimal services for that variant and nothing else.
+
+## Rationale
+
+**Variant isolation:** An engineer who pulls the `pattern/batch-lakehouse/spark-iceberg` branch should not start a Kafka broker (needed for streaming patterns but not for batch). A per-variant `docker-compose.yml` makes the local stack match the pattern — no unnecessary services, no confusion about what is required.
+
+**No shared state:** A shared root-level `docker-compose.yml` with profiles creates shared state problems. Kafka volumes from a CDC run interfere with a batch-lakehouse run. Per-variant Compose files use isolated Docker networks and named volumes, so variants do not collide.
+
+**Branch compatibility:** Because each branch contains only one variant's files, a per-variant `docker-compose.yml` at the variant root becomes the `docker-compose.yml` at the branch root after `sync-pattern-branches.sh` runs. An engineer who clones the pattern branch runs `docker compose up` at the repo root — no path navigation required.
+
+**MinIO as S3 substitute:** All variants that write to object storage use MinIO (S3-compatible API, runs in Docker). MinIO is configured with a `chakra-lakehouse` bucket and access credentials in `.env.example`. No AWS account required.
+
+## Local stack by pattern
+
+| Pattern | Services in docker-compose.yml |
+|---|---|
+| Batch Lakehouse (Spark + Iceberg) | MinIO, Iceberg REST catalog |
+| Batch Lakehouse (Spark + Delta) | MinIO |
+| Batch Lakehouse (Spark + Iceberg + Airflow) | MinIO, Iceberg REST catalog, Airflow (standalone) |
+| Streaming Lakehouse (Flink + Iceberg) | Kafka, Flink JobManager + TaskManager, MinIO, Iceberg REST catalog |
+| Streaming Lakehouse (Spark + Delta) | Kafka, MinIO |
+| ELT (dbt + Snowflake) | None (Snowflake is cloud-only; `.env.example` provides credentials) |
+| ELT (dbt + BigQuery) | None (BigQuery is cloud-only) |
+| ELT (dbt + DuckDB + Airflow) | Airflow (standalone) |
+| CDC (Debezium + Kafka + Flink) | PostgreSQL, Kafka + Connect, Flink JobManager + TaskManager, MinIO |
+| CDC (Debezium + Kafka + Spark) | PostgreSQL, Kafka + Connect, MinIO |
+| Lambda (Flink + Spark + Iceberg) | Kafka, Flink, MinIO, Iceberg REST catalog |
+| Lambda (Spark Streaming + Spark Batch + Delta) | Kafka, MinIO |
+| Federated Query (Trino + Iceberg + S3) | Trino, MinIO, Iceberg REST catalog |
+| Federated Query (Presto + Hive) | Presto, Hive Metastore (PostgreSQL-backed), MinIO |
+| ML Feature Pipeline (Feast + Redis + Spark) | Redis, MinIO |
+| ML Feature Pipeline (Flink + Spark offline) | Kafka, Flink, MinIO |
+| ML Feature Pipeline (Feast + Spark + Airflow) | Redis, MinIO, Airflow (standalone) |
+| Graph Processing (Spark GraphX) | MinIO |
+| Graph Processing (Neo4j + Spark) | Neo4j |
+| Workflow Orchestration (Airflow) | Airflow (standalone with LocalExecutor) |
+| Workflow Orchestration (Prefect) | Prefect server |
+| Workflow Orchestration (Dagster) | Dagster webserver + daemon |
+
+## Consequences
+
+**Positive:**
+- `docker compose up` starts exactly what the pattern needs — nothing more.
+- Pattern branches are immediately usable: clone, copy `.env.example` to `.env`, `docker compose up`.
+- No cross-pattern state pollution.
+
+**Negative:**
+- 22 `docker-compose.yml` files to maintain. When a base image version changes (e.g., MinIO tag), all variants that use MinIO must be updated.
+- Heavier variants (Flink + Kafka + MinIO + Iceberg REST) require ~6GB RAM. Engineers on 8GB machines will be constrained.
+
+## When this choice stops being correct
+
+If Docker Compose is superseded as the local dev standard (e.g., if Podman Compose or Nix-based dev environments become the norm), the `docker-compose.yml` files should be migrated. The per-variant isolation principle survives the tool change.
+
+## Alternatives considered
+
+**Shared docker-compose.yml with profiles:** Rejected. An engineer pulling a single-variant branch gets a `docker-compose.yml` that references services from other patterns via profiles. Confusing and unnecessary.
+
+**Dev container / Codespaces:** Rejected. Dev containers require VS Code or a GitHub Codespaces subscription. They are not universally available and add a cloud dependency to what should be a purely local experience.
+
+**Minikube / k3d:** Rejected. Kubernetes adds significant complexity for what is fundamentally a local dev experience. The production deployment story (Kubernetes) is documented in each variant's README but is not part of the local dev stack.
+```
+
+- [ ] **Step 3: Verify MkDocs builds**
+
+```bash
+mkdocs build --strict 2>&1 | grep -E "(ERROR|built successfully)"
+```
+
+Expected: `INFO - Documentation built successfully.`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add docs/adrs/ADR-0007-cdc-tooling.md \
+        docs/adrs/ADR-0008-local-dev-approach.md
+git commit -m "docs: ADR-0007 CDC tooling, ADR-0008 local dev approach"
+```
+
+---
+
+### Task 9: ADRs 0009 and 0010
+
+**Files:**
+- Create: `docs/adrs/ADR-0009-graph-processing.md`
+- Create: `docs/adrs/ADR-0010-ml-feature-pipeline.md`
+
+- [ ] **Step 1: Write `docs/adrs/ADR-0009-graph-processing.md`**
+
+```markdown
+# ADR-0009: Graph Processing — When Graph is the Right Model
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+Graph processing is included as a pattern alongside lakehouse, streaming, and ELT patterns. Unlike the others, graph processing is not a data pipeline pattern — it is a computational model. The question is when graph processing is warranted and how to frame it in a patterns repo.
+
+Additionally, two tools are available: Spark GraphX (batch graph algorithms on distributed data) and Neo4j (a native graph database with the Cypher query language, connected to Spark via the Neo4j Spark Connector).
+
+## Decision
+
+Include graph processing as a pattern with two variants: **Spark GraphX** for batch distributed graph algorithms, and **Neo4j + Spark** for graph-native query + Spark-scale ingestion. Frame the pattern README around the question "when is graph the right model?" before presenting the variants.
+
+## Rationale
+
+### When graph is the right model
+
+Relational databases model entities (rows) and their attributes (columns). Graph databases model entities (nodes) and the relationships between them (edges) as first-class citizens. The choice of model depends on whether relationships are the primary query target.
+
+**Use graph when:**
+- The query is "traverse from A, find all B reachable within N hops" (e.g., fraud ring detection, social network recommendations, supply chain dependency analysis)
+- Relationship attributes (edge properties: weight, timestamp, type) are as important as node attributes
+- The graph has variable-depth traversal requirements (cannot be expressed as a fixed JOIN depth)
+
+**Use relational/lakehouse when:**
+- Relationships are filters, not traversal targets (e.g., "orders placed by customers in region X")
+- The query can be expressed as a bounded JOIN (2–3 tables)
+- Aggregate analytics (SUM, COUNT, GROUP BY) are the primary access pattern
+
+### Spark GraphX
+
+GraphX runs batch graph algorithms (PageRank, connected components, triangle counting, label propagation) on graphs that fit in distributed Spark memory. It is the right choice when:
+- The graph is large (billions of edges) and must be distributed
+- The algorithm is a standard graph algorithm (not an ad-hoc traversal)
+- Results are materialised to a lakehouse table for downstream consumption
+
+GraphX's API is low-level (RDD-based, not DataFrame-based). Writing GraphX code requires understanding RDD transformations and graph partitioning strategies.
+
+### Neo4j + Spark
+
+Neo4j is a native graph database with Cypher as its query language. The Neo4j Spark Connector writes Spark DataFrames to Neo4j (bulk ingestion) and reads Neo4j query results as Spark DataFrames (large-scale graph analytics output back to the lakehouse).
+
+Use Neo4j + Spark when:
+- The graph requires real-time traversal queries (Cypher WHERE path queries) in addition to batch algorithms
+- The team is comfortable with Cypher as a query language
+- The graph size fits in a Neo4j cluster (up to ~10B nodes in community edition, larger with Enterprise)
+
+## Consequences
+
+**Positive:**
+- Two variants cover the two primary graph use cases: batch algorithm (GraphX) and native graph query + bulk ingestion (Neo4j + Spark).
+- The pattern README steers engineers away from graph when it is not the right model, preventing the common mistake of over-engineering a JOIN as a graph traversal.
+
+**Negative:**
+- GraphX's RDD API is considered legacy within Spark (GraphFrames, the DataFrame-based alternative, is more ergonomic but requires an external JAR not bundled with Spark). GraphX is included because it ships with Spark and needs no additional dependency.
+- Neo4j requires a licence for production Enterprise features; Community Edition has memory limits that are hit quickly at scale.
+
+## When this choice stops being correct
+
+If GraphFrames (DataFrame-based graph API) is bundled with Spark or achieves the same distribution as GraphX, replace the GraphX variant with GraphFrames — the API is more ergonomic and consistent with the Spark DataFrame model used in other patterns.
+
+## Alternatives considered
+
+**Apache Giraph:** Rejected. Giraph is Hadoop-era graph processing, effectively unmaintained, and superseded by GraphX.
+
+**Amazon Neptune:** Rejected. Cloud-specific, no local dev equivalent, incompatible with the open-source-on-object-storage philosophy of this repo.
+
+**TigerGraph:** Rejected. Proprietary, requires a commercial licence for production use.
+```
+
+- [ ] **Step 2: Write `docs/adrs/ADR-0010-ml-feature-pipeline.md`**
+
+```markdown
+# ADR-0010: ML Feature Pipeline — Online vs Offline Store Split
+
+**Status**: Accepted
+**Date**: 2026-04-25
+**Deciders**: Portfolio architect
+
+---
+
+## Context
+
+The ML feature pipeline pattern computes and serves features for machine learning models. Two concerns must be addressed independently:
+
+1. **Offline store** — historical feature values used for model training and batch inference. Latency: minutes. Storage: Parquet/Iceberg on object storage.
+2. **Online store** — current feature values used for real-time model serving. Latency: milliseconds. Storage: Redis or a key-value store.
+
+A decision must be made about whether to use a feature store framework (Feast) to manage both stores, or to build the two stores separately with Flink (online) and Spark (offline).
+
+## Decision
+
+Provide **three variants**:
+
+1. **Feast + Redis + Spark** — use Feast to manage both stores. Feast materialises features from the offline store (Parquet/Iceberg on S3) into the online store (Redis) on a schedule. Spark computes the offline features.
+2. **Flink online + Spark offline** — no feature store framework. Flink computes online features continuously (low latency); Spark computes offline features on a schedule. The engineer manages the two stores independently.
+3. **Feast + Spark + Airflow** — same as variant 1 but Airflow orchestrates the Feast materialisation and Spark offline computation jobs.
+
+## Rationale
+
+### Online vs offline split
+
+The split exists because the two serving contexts have incompatible requirements. Training a model on 1TB of historical features requires sequential reads from object storage — Redis cannot serve this efficiently. Serving a real-time prediction requires sub-millisecond feature lookup — querying object storage cannot do this. The split is not optional; it is a consequence of the access patterns.
+
+### Why Feast
+
+Feast is the most widely deployed open-source feature store. It provides:
+- A unified feature definition (Python `FeatureView` objects) that drives both offline and online materialisation
+- A `get_online_features()` API that abstracts the online store (Redis, DynamoDB, BigTable) behind a consistent interface
+- An offline retrieval API (`get_historical_features()`) for training data generation with point-in-time correctness
+- Integration with Spark for offline feature computation
+
+Feast's materialisation (copying features from offline to online) is the key operation that links the two stores. Airflow or a scheduled Feast job triggers materialisation on a defined cadence.
+
+### Why the Flink + Spark offline variant
+
+Not all teams want to adopt a feature store framework. The Flink + Spark variant demonstrates the underlying mechanics: Flink writes features to Redis directly (using the Flink Redis Sink); Spark writes features to the offline Parquet store. The engineer manages consistency between the two stores without a framework abstraction.
+
+This variant is educational: it makes the online/offline split explicit without hiding it behind Feast's API. Engineers who build on it understand what Feast is doing under the hood.
+
+## Consequences
+
+**Positive:**
+- Three variants cover the full spectrum: framework-managed (Feast), framework-managed + orchestrated (Feast + Airflow), and hand-rolled (Flink + Spark).
+- Feast variants demonstrate the point-in-time correctness property of `get_historical_features()` — a subtle but critical requirement for unbiased training data.
+
+**Negative:**
+- Feast's materialisation requires a running Redis instance and a configured Feast registry. The docker-compose.yml provides both, but the first-run experience is more involved than other patterns.
+- The Flink + Spark offline variant does not implement point-in-time correctness — engineers extending it for training data must implement this themselves.
+
+## When this choice stops being correct
+
+If Feast deprecates Spark in favour of a new offline engine (e.g., DuckDB-based materialisation), the Feast + Spark + Airflow variant must be updated. Revisit also if Tecton (managed feature platform) introduces an open-source core that warrants inclusion as a fourth variant.
+
+## Alternatives considered
+
+**MLflow Feature Store:** Rejected. MLflow's feature store is Databricks-native and not available as a standalone open-source component.
+
+**Hopsworks Feature Store:** Rejected. Hopsworks is a full ML platform (not just a feature store) and requires significant infrastructure. Too heavy for a boilerplate starter.
+
+**Tecton:** Rejected. Proprietary SaaS, no self-hosted option.
+```
+
+- [ ] **Step 3: Verify MkDocs builds**
+
+```bash
+mkdocs build --strict 2>&1 | grep -E "(ERROR|built successfully)"
+```
+
+Expected: `INFO - Documentation built successfully.`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add docs/adrs/ADR-0009-graph-processing.md \
+        docs/adrs/ADR-0010-ml-feature-pipeline.md
+git commit -m "docs: ADR-0009 graph processing, ADR-0010 ML feature pipeline"
+```
+
+---
+
+### Task 10: Pattern Docs Pages (All 9)
+
+**Files:**
+- Overwrite: `docs/patterns/batch-lakehouse.md`
+- Overwrite: `docs/patterns/streaming-lakehouse.md`
+- Overwrite: `docs/patterns/elt-warehouse.md`
+- Overwrite: `docs/patterns/cdc-pipeline.md`
+- Overwrite: `docs/patterns/lambda-architecture.md`
+- Overwrite: `docs/patterns/federated-query.md`
+- Overwrite: `docs/patterns/ml-feature-pipeline.md`
+- Overwrite: `docs/patterns/graph-processing.md`
+- Overwrite: `docs/patterns/workflow-orchestration.md`
+
+- [ ] **Step 1: Write `docs/patterns/batch-lakehouse.md`**
+
+```markdown
+# Batch Lakehouse
+
+Scheduled Spark jobs read from source systems, apply transformations, and write to an open table format (Iceberg or Delta Lake) on object storage. The highest-throughput, lowest-complexity pattern for analytical data movement.
+
+## When to use
+
+- Latency requirement is > 15 minutes (hourly, daily, or on-demand runs are acceptable)
+- Source data arrives in files (S3 drops, SFTP, database exports) or via scheduled database queries
+- Full reprocessing from source is feasible (no need to replay a Kafka log)
+- Team is Spark/Scala fluent; no Kafka or Flink expertise required
+- Cost is a primary constraint — Spark runs only during the job, no always-on cluster
+
+## When NOT to use
+
+- You need < 5-minute data freshness — use Streaming Lakehouse
+- Your source is a live database WAL — use CDC Pipeline
+- Your team writes SQL but not Scala — use ELT / Warehouse
+
+## Variants
+
+| Variant | Stack | Key idiom | Use when |
+|---|---|---|---|
+| [spark-iceberg](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/batch-lakehouse/variants/spark-iceberg) | Spark 3.5 + Iceberg 1.5 + S3 | `DataFrameWriter` with Iceberg catalog | Multi-engine shop; need Trino/Presto reads |
+| [spark-delta](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/batch-lakehouse/variants/spark-delta) | Spark 3.5 + Delta Lake 3.1 + S3 | `DeltaTable.forPath().merge()` | Databricks-first; want tightest Spark integration |
+| [spark-iceberg-airflow](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/batch-lakehouse/variants/spark-iceberg-airflow) | Spark + Iceberg + Airflow 2.9 | `SparkSubmitOperator` in DAG | Need scheduled retry, alerting, and backfill |
+
+## Related patterns
+
+- [Streaming Lakehouse](streaming-lakehouse.md) — when latency < 5 minutes is required
+- [CDC Pipeline](cdc-pipeline.md) — when source is a live database WAL
+- [Workflow Orchestration](workflow-orchestration.md) — when you need a standalone orchestrator reference
+```
+
+- [ ] **Step 2: Write `docs/patterns/streaming-lakehouse.md`**
+
+```markdown
+# Streaming Lakehouse
+
+A continuous pipeline reads events from a Kafka topic, processes them with Flink or Spark Structured Streaming, and writes to an open table format with sub-minute commit latency. Combines the freshness of streaming with the query semantics of a lakehouse.
+
+## When to use
+
+- Latency requirement is 1–5 minutes (or sub-minute with Flink)
+- Source data is already in Kafka (events, CDC output, IoT telemetry)
+- Reprocessing must replay the Kafka log from a given offset — not re-extract from source
+- Exactly-once semantics are required (Flink variant) or micro-batch is acceptable (Spark variant)
+
+## When NOT to use
+
+- Latency > 15 minutes — use Batch Lakehouse (simpler, cheaper)
+- Source is a live database and you haven't set up Kafka — use CDC Pipeline first, then this pattern downstream
+- Team has no Kafka or stream processing experience — operational complexity is high
+
+## Variants
+
+| Variant | Stack | Key idiom | Latency floor | Use when |
+|---|---|---|---|---|
+| [flink-iceberg](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/streaming-lakehouse/variants/flink-iceberg) | Flink 1.19 + Iceberg 1.5 + Kafka | `FlinkSink` with two-phase commit on checkpoint | ~5s (checkpoint interval) | Exactly-once, event-time windowing, sub-minute |
+| [spark-delta](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/streaming-lakehouse/variants/spark-delta) | Spark 3.5 + Delta 3.1 + Kafka | `readStream` + `foreachBatch` with Delta MERGE | ~30–60s (trigger interval) | Team knows Spark, latency > 30s acceptable |
+
+## Related patterns
+
+- [Batch Lakehouse](batch-lakehouse.md) — when latency > 15 minutes is fine
+- [CDC Pipeline](cdc-pipeline.md) — when source is a database WAL, not a Kafka topic
+- [Lambda Architecture](lambda-architecture.md) — when both streaming AND batch correctness are required
+```
+
+- [ ] **Step 3: Write `docs/patterns/elt-warehouse.md`**
+
+```markdown
+# ELT / Warehouse
+
+dbt transforms data that is already in a cloud warehouse (Snowflake, BigQuery) or a local analytical database (DuckDB). No distributed compute required — the warehouse handles scale. The simplest pattern when your data is already where it needs to be.
+
+## When to use
+
+- Data is already loaded into a cloud warehouse or DuckDB
+- Transformation logic is SQL (no Python UDFs, no distributed joins across systems)
+- Latency requirement is minutes to hours (dbt runs on a schedule)
+- Team writes SQL fluently; no Spark or Flink experience required
+- You want built-in lineage, testing, and documentation (dbt provides all three)
+
+## When NOT to use
+
+- Data is not yet in the warehouse — load it first (use CDC Pipeline, Batch Lakehouse, or a managed ELT tool)
+- Latency < 5 minutes — dbt is not a streaming tool
+- Transformation logic requires Python, ML inference, or cross-system joins — use Spark or Federated Query
+
+## Variants
+
+| Variant | Stack | Use when |
+|---|---|---|
+| [dbt-snowflake](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/elt-warehouse/variants/dbt-snowflake) | dbt 1.8 + Snowflake | Snowflake is your warehouse |
+| [dbt-bigquery](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/elt-warehouse/variants/dbt-bigquery) | dbt 1.8 + BigQuery | GCP-first org |
+| [dbt-duckdb-airflow](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/elt-warehouse/variants/dbt-duckdb-airflow) | dbt 1.8 + DuckDB + Airflow 2.9 | Cost-sensitive, small-medium data, local or file-based |
+
+## Related patterns
+
+- [Batch Lakehouse](batch-lakehouse.md) — when data is not in a warehouse and must be processed at scale
+- [CDC Pipeline](cdc-pipeline.md) — to load data into the warehouse from a live database
+- [Workflow Orchestration](workflow-orchestration.md) — for standalone dbt orchestration references
+```
+
+- [ ] **Step 4: Write `docs/patterns/cdc-pipeline.md`**
+
+```markdown
+# CDC Pipeline
+
+Debezium reads the database write-ahead log (WAL) and streams every committed insert, update, and delete as an event to a Kafka topic. A downstream processor (Flink or Spark) consumes the CDC events and materialises them into the lakehouse.
+
+## When to use
+
+- Source is a live relational database (PostgreSQL, MySQL, SQL Server, Oracle)
+- Sub-second capture latency is required (WAL-based, not polling-based)
+- You need a full change history, not just current state (every insert/update/delete)
+- Zero impact on source database query performance is required (WAL reading does not add query load)
+
+## When NOT to use
+
+- Source database does not support WAL replication (use Airbyte with query-based CDC instead)
+- Latency > 5 minutes acceptable and source supports direct Spark JDBC reads — use Batch Lakehouse (simpler)
+- You only need current state, not change history — a nightly snapshot may be sufficient
+
+## Variants
+
+| Variant | Stack | Key idiom | Use when |
+|---|---|---|---|
+| [debezium-kafka-flink](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/cdc-pipeline/variants/debezium-kafka-flink) | Debezium + Kafka + Flink 1.19 | `KafkaSource` consuming CDC envelope → `KeyedProcessFunction` for upsert | Exactly-once, complex stream processing downstream |
+| [debezium-kafka-spark](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/cdc-pipeline/variants/debezium-kafka-spark) | Debezium + Kafka + Spark 3.5 | `readStream` from Kafka → `foreachBatch` with Delta MERGE | Team knows Spark, latency > 30s acceptable |
+
+## Related patterns
+
+- [Streaming Lakehouse](streaming-lakehouse.md) — this pattern feeds into a streaming lakehouse
+- [Lambda Architecture](lambda-architecture.md) — CDC as the streaming input to the Lambda pattern
+```
+
+- [ ] **Step 5: Write `docs/patterns/lambda-architecture.md`**
+
+```markdown
+# Lambda Architecture
+
+Two parallel processing paths — a streaming path (low latency, approximate) and a batch path (high latency, accurate) — whose outputs are merged at query time. Use only when both sub-minute freshness AND batch-level accuracy are simultaneously required.
+
+## When to use
+
+- Stakeholders require both: approximate results within seconds AND fully accurate results within hours
+- Reprocessing is required regularly (batch corrects streaming approximations)
+- Team can operate both Flink/Spark Streaming AND a separate Spark batch job
+- The query layer (Iceberg/Delta time travel, or a serving layer) can merge streaming and batch output
+
+## When NOT to use
+
+- Sub-minute latency is not required — use Batch Lakehouse (half the operational complexity)
+- Batch accuracy is not required — use Streaming Lakehouse
+- Your team cannot staff two processing paths — the operational cost is high; Lambda is only justified when the business requirement genuinely demands it
+
+## Variants
+
+| Variant | Stack | Use when |
+|---|---|---|
+| [flink-spark-iceberg](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/lambda-architecture/variants/flink-spark-iceberg) | Flink 1.19 (streaming) + Spark 3.5 (batch) + Iceberg | Need exactly-once streaming AND Iceberg portability |
+| [spark-streaming-batch-delta](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/lambda-architecture/variants/spark-streaming-batch-delta) | Spark Structured Streaming + Spark Batch + Delta | Single Spark team, Delta as unifying format |
+
+## Related patterns
+
+- [Streaming Lakehouse](streaming-lakehouse.md) — if you can drop the batch path
+- [Batch Lakehouse](batch-lakehouse.md) — if you can drop the streaming path
+```
+
+- [ ] **Step 6: Write `docs/patterns/federated-query.md`**
+
+```markdown
+# Federated Query
+
+Trino or Presto queries across multiple storage systems (Iceberg on S3, Hive, PostgreSQL, Kafka) without moving data. The right pattern when your data estate is polyglot and data movement is too expensive or too slow.
+
+## When to use
+
+- Data lives in multiple systems (lakehouse + operational database + data warehouse) and must be queried together
+- Data movement (ETL) is not feasible due to volume, latency, or cost
+- Query latency of seconds to minutes is acceptable (federated queries are slower than local queries)
+- Team is SQL-fluent and does not need a processing engine for transformation
+
+## When NOT to use
+
+- All data is in one system — direct query is always faster than federation
+- Sub-second query latency required — federated queries cross network boundaries; local queries do not
+- Heavy aggregations on huge tables — federated query engines push down filters but not all aggregations; Spark batch will outperform
+
+## Variants
+
+| Variant | Stack | Use when |
+|---|---|---|
+| [trino-iceberg-s3](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/federated-query/variants/trino-iceberg-s3) | Trino 450 + Iceberg 1.5 + MinIO | Iceberg as primary format; Presto-compatible SQL |
+| [presto-hive](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/federated-query/variants/presto-hive) | Presto 0.287 + Hive Metastore | Existing Hive metastore; legacy Hadoop estate |
+
+## Related patterns
+
+- [Batch Lakehouse](batch-lakehouse.md) — to build the Iceberg tables that Trino queries
+- [ELT / Warehouse](elt-warehouse.md) — when all data is already in one warehouse
+```
+
+- [ ] **Step 7: Write `docs/patterns/ml-feature-pipeline.md`**
+
+```markdown
+# ML Feature Pipeline
+
+Computes and serves ML features with a clear split: an offline store (historical features on object storage) for model training, and an online store (Redis or key-value) for real-time model serving.
+
+## When to use
+
+- ML models require features at serving time with millisecond latency (online store)
+- Training data must be consistent with serving features (point-in-time correctness)
+- Feature logic must be shared between training and serving (no training/serving skew)
+- Team owns ML model training and serving, not just data pipelines
+
+## When NOT to use
+
+- Models use only static features (no time-varying inputs) — batch inference from a lakehouse table is sufficient
+- No real-time serving — offline batch inference does not need an online store
+- ML platform is managed (Databricks Feature Store, Vertex AI Feature Store) — use the platform's native feature API
+
+## Variants
+
+| Variant | Stack | Use when |
+|---|---|---|
+| [feast-redis-spark](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/ml-feature-pipeline/variants/feast-redis-spark) | Feast 0.40 + Redis + Spark 3.5 | Want a feature store framework managing both stores |
+| [flink-spark-offline](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/ml-feature-pipeline/variants/flink-spark-offline) | Flink 1.19 (online) + Spark 3.5 (offline) | Want to own the online/offline mechanics without a framework |
+| [feast-spark-airflow](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/ml-feature-pipeline/variants/feast-spark-airflow) | Feast + Spark + Airflow 2.9 | Feast + scheduled materialisation with orchestration |
+
+## Related patterns
+
+- [Streaming Lakehouse](streaming-lakehouse.md) — the offline store feeds from a streaming lakehouse in production
+- [Workflow Orchestration](workflow-orchestration.md) — for scheduling feature materialisation jobs
+```
+
+- [ ] **Step 8: Write `docs/patterns/graph-processing.md`**
+
+```markdown
+# Graph Processing
+
+Graph algorithms (PageRank, connected components, shortest path) run on distributed graphs via Spark GraphX, or graph-native Cypher queries run in Neo4j with Spark used for bulk ingestion and result extraction.
+
+## When to use
+
+- Query is a graph traversal: "find all nodes reachable from A within N hops"
+- Relationship attributes (edge weight, edge type, edge timestamp) are as important as node attributes
+- Algorithms are graph-native: PageRank, community detection, shortest path, triangle counting
+- Relational JOINs at fixed depth cannot express the query (variable-depth traversal)
+
+## When NOT to use
+
+- Relationships are filters, not traversal targets ("orders by customers in region X" is a JOIN, not a graph query)
+- Aggregate analytics (SUM, COUNT, GROUP BY) dominate — use a lakehouse pattern
+- Graph fits in a single machine — NetworkX (Python) is sufficient; no distributed engine required
+
+## Variants
+
+| Variant | Stack | Use when |
+|---|---|---|
+| [spark-graphx](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/graph-processing/variants/spark-graphx) | Spark 3.5 GraphX (Scala) | Batch graph algorithms on large distributed graphs; PageRank, connected components |
+| [neo4j-spark](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/graph-processing/variants/neo4j-spark) | Neo4j 5 + Spark Connector (Scala + Cypher) | Need Cypher traversal queries + Spark for bulk ingestion |
+
+## Related patterns
+
+- [Batch Lakehouse](batch-lakehouse.md) — to store graph algorithm results for downstream consumption
+- [Federated Query](federated-query.md) — to query graph results alongside other data sources
+```
+
+- [ ] **Step 9: Write `docs/patterns/workflow-orchestration.md`**
+
+```markdown
+# Workflow Orchestration
+
+Airflow, Prefect, or Dagster schedule and coordinate the tasks that make up a data pipeline. Orchestration is the glue between every other pattern — a batch lakehouse job is just a Spark submit until Airflow gives it a schedule, retry logic, and an SLA alert.
+
+## When to use
+
+- Any batch or scheduled pipeline needs retry on failure, dependency management, or backfill
+- Multiple pipeline steps must be coordinated (extract → transform → load → notify)
+- Operational visibility (which runs succeeded, which failed, how long they took) is required
+- SLA alerting on pipeline completion time is needed
+
+## When NOT to use
+
+- Your pipeline is a continuous streaming job (Flink/Spark Streaming) — streaming jobs are long-running processes, not scheduled tasks; use a process supervisor (Kubernetes Deployment, systemd) instead
+- You have a single script with no dependencies — a cron job is sufficient
+
+## Variants
+
+| Variant | Stack | Key differentiator | Use when |
+|---|---|---|---|
+| [airflow](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/workflow-orchestration/variants/airflow) | Airflow 2.9 (LocalExecutor) | 600+ providers, mature ecosystem | Large org, many integrations, existing Airflow investment |
+| [prefect](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/workflow-orchestration/variants/prefect) | Prefect 2.x | Python-native flows, dynamic tasks | Python-first team, modern UX, dynamic task generation |
+| [dagster](https://github.com/naren-chakraview/chakraview-data-engineering-patterns/tree/main/patterns/workflow-orchestration/variants/dagster) | Dagster 1.x | Software-defined assets, lineage graph | Asset-centric thinking, strong observability requirements |
+
+## Related patterns
+
+- [Batch Lakehouse](batch-lakehouse.md) — the spark-iceberg-airflow variant integrates Airflow directly
+- [ELT / Warehouse](elt-warehouse.md) — the dbt-duckdb-airflow variant integrates Airflow directly
+- [ML Feature Pipeline](ml-feature-pipeline.md) — the feast-spark-airflow variant integrates Airflow directly
+```
+
+- [ ] **Step 10: Verify MkDocs builds cleanly with all pages**
+
+```bash
+mkdocs build --strict 2>&1 | grep -E "(ERROR|built successfully)"
+```
+
+Expected: `INFO - Documentation built successfully.`
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add docs/patterns/
+git commit -m "docs: all 9 pattern pages with fit notes, variants table, and cross-references"
+```
+
+---
+
+*Tasks 11–15 continue in the next batch.*
