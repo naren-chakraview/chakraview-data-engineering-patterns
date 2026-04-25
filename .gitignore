@@ -1,0 +1,32 @@
+# Scala / SBT
+target/
+.bsp/
+.metals/
+.idea/
+*.class
+
+# Java / Maven
+**/target/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# dbt
+dbt_packages/
+dbt_project/target/
+logs/
+
+# MkDocs
+site/
+
+# Environment
+.env
+*.env
+
+# OS
+.DS_Store

@@ -1,0 +1,113 @@
+site_name: Chakra Data Engineering Patterns
+site_description: >
+  Idiomatic boilerplate starters for 9 data engineering patterns × 22 stack
+  variants. Landscape intro, decision matrix, and ADRs for every trade-off.
+site_url: https://naren-chakraview.github.io/chakraview-data-engineering-patterns/
+repo_name: naren-chakraview/chakraview-data-engineering-patterns
+repo_url: https://github.com/naren-chakraview/chakraview-data-engineering-patterns
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search:
+      lang: en
+  - tags
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/naren-chakraview
+  generator: false
+
+nav:
+  - Home: index.md
+  - Landscape: landscape/index.md
+  - Decision Matrix: decision-matrix/index.md
+  - Patterns:
+    - Batch Lakehouse: patterns/batch-lakehouse.md
+    - Streaming Lakehouse: patterns/streaming-lakehouse.md
+    - ELT / Warehouse: patterns/elt-warehouse.md
+    - CDC Pipeline: patterns/cdc-pipeline.md
+    - Lambda Architecture: patterns/lambda-architecture.md
+    - Federated Query: patterns/federated-query.md
+    - ML Feature Pipeline: patterns/ml-feature-pipeline.md
+    - Graph Processing: patterns/graph-processing.md
+    - Workflow Orchestration: patterns/workflow-orchestration.md
+  - ADRs:
+    - adrs/README.md
+    - ADR-0001 Pattern Matrix: adrs/ADR-0001-pattern-matrix-structure.md
+    - ADR-0002 Language Convention: adrs/ADR-0002-idiomatic-language-per-ecosystem.md
+    - ADR-0003 Table Formats: adrs/ADR-0003-table-format-landscape.md
+    - ADR-0004 Stream Processing: adrs/ADR-0004-stream-processing-engine.md
+    - ADR-0005 Orchestration: adrs/ADR-0005-orchestration-landscape.md
+    - ADR-0006 Lakehouse Storage: adrs/ADR-0006-lakehouse-storage-layer.md
+    - ADR-0007 CDC Tooling: adrs/ADR-0007-cdc-tooling.md
+    - ADR-0008 Local Dev: adrs/ADR-0008-local-dev-approach.md
+    - ADR-0009 Graph Processing: adrs/ADR-0009-graph-processing.md
+    - ADR-0010 ML Feature Pipeline: adrs/ADR-0010-ml-feature-pipeline.md
