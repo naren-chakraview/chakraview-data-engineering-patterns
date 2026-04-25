@@ -4590,4 +4590,2330 @@ git commit -m "feat: lambda-architecture pattern — flink-spark-iceberg and spa
 
 ---
 
-*Tasks 16–20 continue in the next batch.*
+---
+
+## Tasks 16–20
+
+---
+
+### Task 16: federated-query (Pattern README + 2 Variants)
+
+**Files:**
+- Create: `patterns/federated-query/README.md`
+- Variant `trino-iceberg-s3`: `README.md`, `config/catalog/iceberg.properties`, `config/catalog/tpch.properties`, `config/config.properties`, `config/jvm.config`, `queries/orders_example.sql`, `docker-compose.yml`, `.env.example`
+- Variant `presto-hive`: `README.md`, `config/catalog/hive.properties`, `config/config.properties`, `config/jvm.config`, `queries/orders_example.sql`, `docker-compose.yml`, `.env.example`
+
+- [ ] **Step 1: Create `patterns/federated-query/README.md`**
+
+```markdown
+# Federated Query
+
+Trino or Presto queries across multiple storage backends without moving data.
+Right for polyglot data estates where ETL is too expensive or slow.
+
+## Variants
+
+| Variant | Engine | Primary catalog | Pull branch |
+|---|---|---|---|
+| `trino-iceberg-s3` | Trino 450 | Iceberg on MinIO/S3 | `pattern/federated-query/trino-iceberg-s3` |
+| `presto-hive` | Presto 0.287 | Hive Metastore (PostgreSQL-backed) | `pattern/federated-query/presto-hive` |
+
+## Choosing between variants
+
+- **trino-iceberg-s3**: default. Trino is more actively developed; Iceberg is the portability choice.
+- **presto-hive**: choose if you have an existing Hive Metastore or Hadoop estate to federate over.
+
+## How federation works
+
+Each catalog in `config/catalog/` maps a connector type to a data source. A single Trino/Presto
+query can join across catalogs:
+```sql
+SELECT o.order_id, c.name
+FROM iceberg.orders.processed o
+JOIN postgresql.public.customers c ON o.customer_id = c.id
+```
+```
+
+- [ ] **Step 2: Create `trino-iceberg-s3/config/config.properties`**
+
+```properties
+coordinator=true
+node-scheduler.include-coordinator=true
+http-server.http.port=8080
+discovery.uri=http://localhost:8080
+query.max-memory=2GB
+query.max-memory-per-node=1GB
+```
+
+- [ ] **Step 3: Create `trino-iceberg-s3/config/jvm.config`**
+
+```
+-server
+-Xmx4G
+-XX:+UseG1GC
+-XX:G1HeapRegionSize=32M
+-XX:+ExplicitGCInvokesConcurrent
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:+ExitOnOutOfMemoryError
+```
+
+- [ ] **Step 4: Create `trino-iceberg-s3/config/catalog/iceberg.properties`**
+
+```properties
+connector.name=iceberg
+iceberg.catalog.type=rest
+iceberg.rest-catalog.uri=${ENV:ICEBERG_REST_URI}
+iceberg.file-format=PARQUET
+fs.native-s3.enabled=true
+s3.endpoint=${ENV:S3_ENDPOINT}
+s3.path-style-access=true
+s3.region=${ENV:AWS_REGION}
+s3.aws-access-key=${ENV:AWS_ACCESS_KEY_ID}
+s3.aws-secret-key=${ENV:AWS_SECRET_ACCESS_KEY}
+```
+
+- [ ] **Step 5: Create `trino-iceberg-s3/config/catalog/tpch.properties`** (built-in demo data)
+
+```properties
+connector.name=tpch
+```
+
+- [ ] **Step 6: Create `trino-iceberg-s3/queries/orders_example.sql`**
+
+```sql
+-- List all Iceberg schemas
+SHOW SCHEMAS FROM iceberg;
+
+-- Query orders written by the batch-lakehouse boilerplate
+SELECT
+    order_id,
+    customer_id,
+    status,
+    amount_usd,
+    date_trunc('day', processed_at) AS order_date
+FROM iceberg.orders.processed
+WHERE processed_at >= CURRENT_DATE - INTERVAL '7' DAY
+LIMIT 100;
+
+-- Cross-catalog federation: Iceberg + built-in TPC-H
+SELECT
+    o.order_id,
+    o.amount_usd,
+    t.name AS nation_name
+FROM iceberg.orders.processed o
+JOIN tpch.sf1.nation t ON t.nationkey = 1
+LIMIT 10;
+
+-- Time travel: query as of a specific snapshot
+SELECT COUNT(*) FROM iceberg.orders.processed
+FOR VERSION AS OF 1234567890;
+```
+
+- [ ] **Step 7: Create `trino-iceberg-s3/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/chakra-lakehouse
+      "
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.10.0
+    depends_on:
+      minio:
+        condition: service_healthy
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://chakra-lakehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+
+  trino:
+    image: trinodb/trino:450
+    depends_on:
+      iceberg-rest:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/config.properties:/etc/trino/config.properties
+      - ./config/jvm.config:/etc/trino/jvm.config
+      - ./config/catalog:/etc/trino/catalog
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      ICEBERG_REST_URI: http://iceberg-rest:8181
+      S3_ENDPOINT: http://minio:9000
+    healthcheck:
+      test: ["CMD", "trino", "--execute", "SELECT 1"]
+      interval: 20s
+      retries: 8
+
+volumes:
+  minio-data:
+```
+
+- [ ] **Step 8: Create `trino-iceberg-s3/.env.example` and `README.md`**
+
+`.env.example`:
+```bash
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+ICEBERG_REST_URI=http://localhost:8181
+```
+
+`README.md`:
+```markdown
+# Federated Query — Trino + Iceberg + S3
+
+## When to use
+Multi-engine data estate. Iceberg tables written by Spark/Flink need ad-hoc SQL access.
+Cross-system joins without data movement.
+
+## When NOT to use
+All data is in one system — query it directly. Sub-second latency — federated queries
+cross network boundaries; they cannot match local query performance.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+# Wait for Trino to be healthy, then query:
+docker exec -it <trino-container> trino --catalog iceberg --schema orders
+trino> SELECT * FROM processed LIMIT 10;
+
+# Or connect with DBeaver/TablePlus to localhost:8080 (no auth for local dev)
+```
+
+Run example queries from `queries/orders_example.sql`.
+```
+
+- [ ] **Step 9: Create `presto-hive` variant**
+
+`config/config.properties`:
+```properties
+coordinator=true
+node-scheduler.include-coordinator=true
+http-server.http.port=8080
+discovery-server.enabled=true
+discovery.uri=http://localhost:8080
+query.max-memory=2GB
+query.max-memory-per-node=1GB
+```
+
+`config/jvm.config` — same as trino-iceberg-s3.
+
+`config/catalog/hive.properties`:
+```properties
+connector.name=hive
+hive.metastore.uri=thrift://hive-metastore:9083
+hive.s3.endpoint=${ENV:S3_ENDPOINT}
+hive.s3.path-style-access=true
+hive.s3.aws-access-key=${ENV:AWS_ACCESS_KEY_ID}
+hive.s3.aws-secret-key=${ENV:AWS_SECRET_ACCESS_KEY}
+hive.s3.ssl.enabled=false
+```
+
+`queries/orders_example.sql`:
+```sql
+-- List Hive databases
+SHOW DATABASES;
+
+-- Query orders table in Hive
+SELECT
+    order_id,
+    customer_id,
+    status,
+    amount_cents / 100.0 AS amount_usd
+FROM hive.default.orders
+WHERE dt = '2026-01-01'
+LIMIT 100;
+
+-- Cross-database join
+SELECT h.order_id, h.status
+FROM hive.default.orders h
+WHERE h.amount_cents > 5000
+ORDER BY h.amount_cents DESC
+LIMIT 20;
+```
+
+`docker-compose.yml`:
+```yaml
+version: "3.9"
+
+services:
+  postgres-metastore:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    volumes:
+      - metastore-data:/var/lib/postgresql/data
+
+  hive-metastore:
+    image: apache/hive:4.0.0
+    depends_on: [postgres-metastore, minio]
+    ports:
+      - "9083:9083"
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: >
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres-metastore/metastore
+        -Djavax.jdo.option.ConnectionUserName=hive
+        -Djavax.jdo.option.ConnectionPassword=hive
+      IS_RESUME: "true"
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+  presto:
+    image: prestodb/presto:0.287
+    depends_on: [hive-metastore]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/config.properties:/opt/presto-server/etc/config.properties
+      - ./config/jvm.config:/opt/presto-server/etc/jvm.config
+      - ./config/catalog:/opt/presto-server/etc/catalog
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      S3_ENDPOINT: http://minio:9000
+
+volumes:
+  metastore-data:
+  minio-data:
+```
+
+`.env.example`:
+```bash
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+```
+
+`README.md`:
+```markdown
+# Federated Query — Presto + Hive Metastore
+
+## When to use
+Existing Hive metastore or Hadoop estate. Legacy tables registered in Hive need SQL access.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+docker exec -it <presto-container> presto --catalog hive --schema default
+presto:default> SHOW TABLES;
+```
+```
+
+- [ ] **Step 10: Verify required files**
+
+```bash
+for variant in trino-iceberg-s3 presto-hive; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/federated-query/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All federated-query variant files present"
+```
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add patterns/federated-query/
+git commit -m "feat: federated-query pattern — trino-iceberg-s3 and presto-hive variants"
+```
+
+---
+
+### Task 17: ml-feature-pipeline (Pattern README + 3 Variants)
+
+**Files:**
+- Create: `patterns/ml-feature-pipeline/README.md`
+- Variant `feast-redis-spark`: `README.md`, `pyproject.toml`, `feature_store.yaml`, `features/order_features.py`, `pipeline/compute_features.py`, `docker-compose.yml`, `.env.example`
+- Variant `flink-spark-offline`: `README.md`, `online/pom.xml`, `online/src/main/java/io/chakraview/features/OnlineFeatureJob.java`, `offline/compute_offline_features.py`, `offline/pyproject.toml`, `docker-compose.yml`, `.env.example`
+- Variant `feast-spark-airflow`: `README.md`, `pyproject.toml`, `feature_store.yaml`, `features/order_features.py`, `dags/feature_pipeline_dag.py`, `docker-compose.yml`, `.env.example`
+
+- [ ] **Step 1: Create `patterns/ml-feature-pipeline/README.md`**
+
+```markdown
+# ML Feature Pipeline
+
+Computes and serves ML features with a clear online (Redis, ms latency) / offline
+(Parquet/Iceberg on S3, minute latency) split.
+
+## Variants
+
+| Variant | Framework | Online store | Offline store | Pull branch |
+|---|---|---|---|---|
+| `feast-redis-spark` | Feast 0.40 | Redis | Parquet on S3 | `pattern/ml-feature-pipeline/feast-redis-spark` |
+| `flink-spark-offline` | None (hand-rolled) | Redis (via Flink) | Parquet on S3 (via Spark) | `pattern/ml-feature-pipeline/flink-spark-offline` |
+| `feast-spark-airflow` | Feast 0.40 + Airflow | Redis | Parquet on S3 | `pattern/ml-feature-pipeline/feast-spark-airflow` |
+
+## Choosing between variants
+
+- **feast-redis-spark**: default. Feast manages point-in-time correct historical retrieval for training.
+- **flink-spark-offline**: choose when you need sub-second online freshness (Flink writes directly to Redis) and want to own the mechanics without a framework.
+- **feast-spark-airflow**: choose when materialisation needs Airflow scheduling, retry, and SLA alerting.
+```
+
+- [ ] **Step 2: Create `feast-redis-spark/feature_store.yaml`**
+
+```yaml
+project: chakra
+registry: data/registry.db
+provider: local
+
+online_store:
+  type: redis
+  connection_string: ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}
+
+offline_store:
+  type: file
+
+entity_key_serialization_version: 2
+```
+
+- [ ] **Step 3: Create `feast-redis-spark/features/order_features.py`**
+
+```python
+from datetime import timedelta
+
+from feast import Entity, FeatureView, Field, FileSource
+from feast.types import Float32, Int64, String
+
+# Entity: the primary key for feature lookups
+order = Entity(
+    name="order_id",
+    description="Unique order identifier",
+)
+
+customer = Entity(
+    name="customer_id",
+    description="Unique customer identifier",
+)
+
+# Offline source: Parquet files computed by Spark (pipeline/compute_features.py)
+order_stats_source = FileSource(
+    path="data/features/order_stats/",
+    timestamp_field="event_timestamp",
+    created_timestamp_column="created",
+)
+
+customer_stats_source = FileSource(
+    path="data/features/customer_stats/",
+    timestamp_field="event_timestamp",
+    created_timestamp_column="created",
+)
+
+# Feature views
+order_stats_fv = FeatureView(
+    name="order_stats",
+    entities=[order],
+    ttl=timedelta(days=1),
+    schema=[
+        Field(name="amount_usd",          dtype=Float32),
+        Field(name="item_count",          dtype=Int64),
+    ],
+    online=True,
+    source=order_stats_source,
+    tags={"team": "ml-platform"},
+)
+
+customer_stats_fv = FeatureView(
+    name="customer_stats",
+    entities=[customer],
+    ttl=timedelta(days=7),
+    schema=[
+        Field(name="order_count_30d",     dtype=Int64),
+        Field(name="total_spend_usd_30d", dtype=Float32),
+        Field(name="avg_order_value_usd", dtype=Float32),
+        Field(name="preferred_status",    dtype=String),
+    ],
+    online=True,
+    source=customer_stats_source,
+    tags={"team": "ml-platform"},
+)
+```
+
+- [ ] **Step 4: Create `feast-redis-spark/pipeline/compute_features.py`**
+
+```python
+"""
+Spark job: compute features and write to offline store (Parquet on S3/local).
+
+Run this on a schedule (daily or hourly) to refresh the offline feature store.
+Feast materialise then pushes fresh values from offline → online (Redis).
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+
+def build_spark() -> SparkSession:
+    return (
+        SparkSession.builder
+        .appName("feast-feature-compute")
+        .config("spark.hadoop.fs.s3a.endpoint",    os.getenv("S3_ENDPOINT", "http://localhost:9000"))
+        .config("spark.hadoop.fs.s3a.access.key",  os.getenv("AWS_ACCESS_KEY_ID", "minioadmin"))
+        .config("spark.hadoop.fs.s3a.secret.key",  os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .getOrCreate()
+    )
+
+
+def compute_order_stats(spark: SparkSession) -> None:
+    orders = spark.read.parquet(os.getenv("ORDERS_PATH", "s3a://chakra-lakehouse/silver/orders/"))
+
+    order_stats = (
+        orders
+        .withColumn("event_timestamp", F.col("placed_at").cast("timestamp"))
+        .withColumn("created", F.lit(datetime.now(tz=timezone.utc).isoformat()))
+        .select(
+            "order_id",
+            "event_timestamp",
+            "created",
+            (F.col("amount_cents") / 100.0).alias("amount_usd"),
+            F.size("items").alias("item_count"),
+        )
+    )
+
+    order_stats.write.mode("overwrite").parquet(
+        os.getenv("ORDER_STATS_PATH", "data/features/order_stats/")
+    )
+    print(f"Computed order_stats: {order_stats.count()} rows")
+
+
+def compute_customer_stats(spark: SparkSession) -> None:
+    orders = spark.read.parquet(os.getenv("ORDERS_PATH", "s3a://chakra-lakehouse/silver/orders/"))
+
+    window_30d = orders.filter(
+        F.col("placed_at") >= F.date_sub(F.current_date(), 30)
+    )
+
+    customer_stats = (
+        window_30d
+        .groupBy("customer_id")
+        .agg(
+            F.count("*").alias("order_count_30d"),
+            (F.sum("amount_cents") / 100.0).alias("total_spend_usd_30d"),
+            (F.avg("amount_cents") / 100.0).alias("avg_order_value_usd"),
+            F.first("status").alias("preferred_status"),
+        )
+        .withColumn("event_timestamp", F.lit(datetime.now(tz=timezone.utc).isoformat()).cast("timestamp"))
+        .withColumn("created", F.lit(datetime.now(tz=timezone.utc).isoformat()))
+    )
+
+    customer_stats.write.mode("overwrite").parquet(
+        os.getenv("CUSTOMER_STATS_PATH", "data/features/customer_stats/")
+    )
+    print(f"Computed customer_stats: {customer_stats.count()} rows")
+
+
+if __name__ == "__main__":
+    spark = build_spark()
+    compute_order_stats(spark)
+    compute_customer_stats(spark)
+    spark.stop()
+```
+
+- [ ] **Step 5: Create `feast-redis-spark/pyproject.toml`**
+
+```toml
+[project]
+name = "ml-feature-pipeline-feast-redis-spark"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "feast[redis]>=0.40.0",
+    "pyspark>=3.5.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pandas>=2.0"]
+```
+
+- [ ] **Step 6: Create `feast-redis-spark/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+volumes:
+  minio-data:
+```
+
+- [ ] **Step 7: Create `feast-redis-spark/.env.example` and `README.md`**
+
+`.env.example`:
+```bash
+REDIS_HOST=localhost
+REDIS_PORT=6379
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+ORDERS_PATH=s3a://chakra-lakehouse/silver/orders/
+ORDER_STATS_PATH=data/features/order_stats/
+CUSTOMER_STATS_PATH=data/features/customer_stats/
+```
+
+`README.md`:
+```markdown
+# ML Feature Pipeline — Feast + Redis + Spark
+
+## When to use
+Standard online/offline split. Feast handles point-in-time correct training data retrieval.
+
+## How to run locally
+
+```bash
+cp .env.example .env && source .env
+pip install -e ".[dev]"
+docker compose up -d          # Redis + MinIO
+
+# 1. Compute offline features (run daily or hourly)
+spark-submit pipeline/compute_features.py
+
+# 2. Apply Feast feature definitions
+feast apply
+
+# 3. Materialise offline → online (Redis)
+feast materialize-incremental $(date -u +%Y-%m-%dT%H:%M:%S)
+
+# 4. Serve online features (in your model serving code)
+python -c "
+from feast import FeatureStore
+store = FeatureStore(repo_path='.')
+features = store.get_online_features(
+    features=['order_stats:amount_usd'],
+    entity_rows=[{'order_id': 'ord-001'}],
+).to_dict()
+print(features)
+"
+```
+```
+
+- [ ] **Step 8: Create `flink-spark-offline` variant — `online/pom.xml`**
+
+Reuse `streaming-lakehouse/variants/flink-iceberg/pom.xml` with `artifactId` changed to `ml-feature-pipeline-flink-online` and add Redis dependency:
+
+```xml
+<!-- Add inside <dependencies>: -->
+<dependency>
+  <groupId>com.redislabs</groupId>
+  <artifactId>jredis-flink</artifactId>
+  <version>1.1.0</version>
+</dependency>
+```
+
+- [ ] **Step 9: Create `flink-spark-offline/online/src/main/java/io/chakraview/features/OnlineFeatureJob.java`**
+
+```java
+package io.chakraview.features;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
+import redis.clients.jedis.Jedis;
+
+// Flink online feature job: reads order events, computes features, writes to Redis.
+// Freshness: ~checkpoint interval (30s). Guarantees: at-least-once (Redis sink is idempotent).
+public class OnlineFeatureJob {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.enableCheckpointing(30_000, CheckpointingMode.AT_LEAST_ONCE);
+
+        KafkaSource<String> source = KafkaSource.<String>builder()
+            .setBootstrapServers(System.getenv("KAFKA_BOOTSTRAP_SERVERS"))
+            .setTopics("events.orders")
+            .setGroupId("flink-online-features")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new SimpleStringSchema())
+            .build();
+
+        DataStream<String> stream = env.fromSource(
+            source, WatermarkStrategy.noWatermarks(), "kafka-orders");
+
+        stream.addSink(new RedisFeatureSink(
+            System.getenv("REDIS_HOST"),
+            Integer.parseInt(System.getenv("REDIS_PORT"))
+        ));
+
+        env.execute("ml-online-feature-job");
+    }
+
+    static class RedisFeatureSink extends RichSinkFunction<String> {
+        private final String host;
+        private final int    port;
+        private transient Jedis jedis;
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+
+        RedisFeatureSink(String host, int port) { this.host = host; this.port = port; }
+
+        @Override
+        public void open(org.apache.flink.configuration.Configuration cfg) {
+            jedis = new Jedis(host, port);
+        }
+
+        @Override
+        public void invoke(String json, Context ctx) throws Exception {
+            JsonNode node = MAPPER.readTree(json);
+            String orderId = node.get("order_id").asText();
+            long   amount  = node.get("amount_cents").asLong();
+            // Store as Redis HASH: feature:order_stats:<order_id>
+            jedis.hset("feature:order_stats:" + orderId,
+                "amount_usd", String.valueOf(amount / 100.0));
+            jedis.expire("feature:order_stats:" + orderId, 86_400); // 24h TTL
+        }
+
+        @Override
+        public void close() { if (jedis != null) jedis.close(); }
+    }
+}
+```
+
+- [ ] **Step 10: Create `flink-spark-offline/offline/compute_offline_features.py`**
+
+Same as `feast-redis-spark/pipeline/compute_features.py` but without Feast dependency — writes Parquet directly.
+
+```python
+"""Spark offline feature computation — writes Parquet for training data retrieval."""
+
+from __future__ import annotations
+import os
+from datetime import datetime, timezone
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+
+def build_spark() -> SparkSession:
+    return (
+        SparkSession.builder.appName("offline-feature-compute")
+        .config("spark.hadoop.fs.s3a.endpoint",   os.getenv("S3_ENDPOINT", "http://localhost:9000"))
+        .config("spark.hadoop.fs.s3a.access.key", os.getenv("AWS_ACCESS_KEY_ID", "minioadmin"))
+        .config("spark.hadoop.fs.s3a.secret.key", os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .getOrCreate()
+    )
+
+
+if __name__ == "__main__":
+    spark = build_spark()
+    orders = spark.read.parquet(os.getenv("ORDERS_PATH", "s3a://chakra-lakehouse/silver/orders/"))
+    now = datetime.now(tz=timezone.utc).isoformat()
+
+    features = (
+        orders
+        .withColumn("event_timestamp", F.col("placed_at").cast("timestamp"))
+        .withColumn("created", F.lit(now))
+        .select("order_id", "customer_id", "event_timestamp", "created",
+                (F.col("amount_cents") / 100.0).alias("amount_usd"))
+    )
+    features.write.mode("overwrite").parquet(
+        os.getenv("OFFLINE_FEATURES_PATH", "s3a://chakra-lakehouse/features/orders/")
+    )
+    print(f"Offline features: {features.count()} rows")
+    spark.stop()
+```
+
+- [ ] **Step 11: Create `flink-spark-offline/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  kafka:
+    image: bitnami/kafka:3.7.0
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  redis:
+    image: redis:7.2-alpine
+    ports: ["6379:6379"]
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+  flink-jobmanager:
+    image: flink:1.19-java17
+    command: jobmanager
+    ports: ["8082:8081"]
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+
+  flink-taskmanager:
+    image: flink:1.19-java17
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4
+
+volumes:
+  minio-data:
+```
+
+`.env.example`:
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+REDIS_HOST=localhost
+REDIS_PORT=6379
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+ORDERS_PATH=s3a://chakra-lakehouse/silver/orders/
+OFFLINE_FEATURES_PATH=s3a://chakra-lakehouse/features/orders/
+```
+
+`README.md`:
+```markdown
+# ML Feature Pipeline — Flink Online + Spark Offline
+
+## When to use
+Sub-second online feature freshness (Flink writes directly to Redis on each event).
+Want to own the mechanics without a feature store framework.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+
+# Online path (Flink — continuous):
+cd online && mvn package -DskipTests
+flink run -m localhost:8082 target/ml-feature-pipeline-flink-online-0.1.0.jar
+
+# Offline path (Spark — scheduled):
+cd offline && pip install pyspark
+spark-submit compute_offline_features.py
+```
+```
+
+- [ ] **Step 12: Create `feast-spark-airflow` variant**
+
+Reuse `feature_store.yaml` and `features/order_features.py` from `feast-redis-spark` verbatim.
+
+`dags/feature_pipeline_dag.py`:
+```python
+"""
+Feature Pipeline DAG — Feast + Spark + Airflow
+
+Steps:
+1. Compute offline features (Spark job)
+2. feast apply (register feature definitions)
+3. feast materialize-incremental (offline → Redis)
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+
+default_args = {
+    "owner": "ml-platform",
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "sla": timedelta(hours=2),
+}
+
+with DAG(
+    dag_id="ml_feature_pipeline",
+    default_args=default_args,
+    description="Compute and materialise ML features daily",
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    tags=["ml", "feast", "features"],
+) as dag:
+
+    compute_features = SparkSubmitOperator(
+        task_id="compute_offline_features",
+        application="/opt/spark-apps/compute_features.py",
+        name="feature-compute-{{ ds }}",
+    )
+
+    feast_apply = BashOperator(
+        task_id="feast_apply",
+        bash_command="cd /opt/feast && feast apply",
+    )
+
+    feast_materialize = BashOperator(
+        task_id="feast_materialize",
+        bash_command=(
+            "cd /opt/feast && "
+            "feast materialize-incremental "
+            "$(date -u +%Y-%m-%dT%H:%M:%S)"
+        ),
+    )
+
+    compute_features >> feast_apply >> feast_materialize
+```
+
+`docker-compose.yml` — Redis + MinIO + Airflow:
+```yaml
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+  airflow:
+    image: apache/airflow:2.9.3-python3.11
+    command: >
+      bash -c "pip install feast[redis] pyspark && airflow standalone"
+    ports: ["8080:8080"]
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-dev-secret}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  minio-data:
+  airflow-logs:
+```
+
+`.env.example`:
+```bash
+REDIS_HOST=localhost
+REDIS_PORT=6379
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+AIRFLOW_SECRET_KEY=dev-secret-change-in-prod
+```
+
+`README.md`:
+```markdown
+# ML Feature Pipeline — Feast + Spark + Airflow
+
+## When to use
+Feast-managed feature store with scheduled Airflow orchestration for retry and SLA alerting.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+# Airflow UI: http://localhost:8080 — trigger dag `ml_feature_pipeline`
+```
+```
+
+- [ ] **Step 13: Verify all ml-feature-pipeline variants**
+
+```bash
+for variant in feast-redis-spark flink-spark-offline feast-spark-airflow; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/ml-feature-pipeline/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All ml-feature-pipeline variant files present"
+```
+
+- [ ] **Step 14: Commit**
+
+```bash
+git add patterns/ml-feature-pipeline/
+git commit -m "feat: ml-feature-pipeline — feast-redis-spark, flink-spark-offline, feast-spark-airflow variants"
+```
+
+---
+
+### Task 18: graph-processing (Pattern README + 2 Variants)
+
+**Files:**
+- Create: `patterns/graph-processing/README.md`
+- Variant `spark-graphx`: `README.md`, `build.sbt`, `src/main/scala/io/chakraview/graph/{Main,GraphBuilder,GraphAlgorithms}.scala`, `docker-compose.yml`, `.env.example`
+- Variant `neo4j-spark`: `README.md`, `build.sbt`, `src/main/scala/io/chakraview/graph/{Main,GraphQueries}.scala`, `config/neo4j.conf`, `docker-compose.yml`, `.env.example`
+
+- [ ] **Step 1: Create `patterns/graph-processing/README.md`**
+
+```markdown
+# Graph Processing
+
+Graph algorithms on distributed graphs (Spark GraphX) or native Cypher traversal queries (Neo4j + Spark).
+
+## Variants
+
+| Variant | Engine | Best algorithm type | Pull branch |
+|---|---|---|---|
+| `spark-graphx` | Spark 3.5 GraphX (Scala) | PageRank, connected components, triangle count | `pattern/graph-processing/spark-graphx` |
+| `neo4j-spark` | Neo4j 5 + Spark Connector (Scala) | Cypher traversal + Spark bulk ingestion | `pattern/graph-processing/neo4j-spark` |
+
+## When NOT to use graph processing
+
+Relationships are filters, not traversal targets: `SELECT * FROM orders WHERE customer_id = 'x'`
+is a JOIN, not a graph query. Use a lakehouse pattern instead.
+Use graph when the query is: "find all nodes reachable from A within N hops."
+```
+
+- [ ] **Step 2: Create `spark-graphx/build.sbt`**
+
+```scala
+ThisBuild / scalaVersion := "2.12.18"
+ThisBuild / version      := "0.1.0"
+ThisBuild / organization := "io.chakraview"
+
+val sparkVersion   = "3.5.1"
+val hadoopVersion  = "3.3.6"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "graph-processing-spark-graphx",
+    libraryDependencies ++= Seq(
+      "org.apache.spark"  %% "spark-core"         % sparkVersion  % "provided",
+      "org.apache.spark"  %% "spark-sql"          % sparkVersion  % "provided",
+      "org.apache.spark"  %% "spark-graphx"       % sparkVersion  % "provided",
+      "org.apache.hadoop"  % "hadoop-aws"         % hadoopVersion % "provided",
+      "com.amazonaws"      % "aws-java-sdk-bundle" % "1.12.262"   % "provided",
+    ),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf"         => MergeStrategy.concat
+      case _                        => MergeStrategy.first
+    },
+  )
+```
+
+- [ ] **Step 3: Create `spark-graphx/src/main/scala/io/chakraview/graph/GraphBuilder.scala`**
+
+```scala
+package io.chakraview.graph
+
+import org.apache.spark.graphx.{Edge, Graph}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.SparkSession
+
+object GraphBuilder {
+
+  // Load graph from a CSV edge list: src_id,dst_id,weight
+  def fromEdgeList(spark: SparkSession, path: String): Graph[Long, Double] = {
+    val edges: RDD[Edge[Double]] = spark.sparkContext
+      .textFile(path)
+      .filter(line => !line.startsWith("#") && line.nonEmpty)
+      .map { line =>
+        val parts = line.split(",")
+        Edge(parts(0).trim.toLong, parts(1).trim.toLong,
+          if (parts.length > 2) parts(2).trim.toDouble else 1.0)
+      }
+    Graph.fromEdges(edges, defaultValue = 1L)
+  }
+}
+```
+
+- [ ] **Step 4: Create `spark-graphx/src/main/scala/io/chakraview/graph/GraphAlgorithms.scala`**
+
+```scala
+package io.chakraview.graph
+
+import org.apache.spark.graphx.Graph
+import org.apache.spark.sql.{DataFrame, SparkSession}
+
+object GraphAlgorithms {
+
+  def pageRank(spark: SparkSession, graph: Graph[Long, Double], tolerance: Double = 0.001): DataFrame = {
+    import spark.implicits._
+    graph.pageRank(tolerance).vertices
+      .toDF("vertex_id", "pagerank")
+      .orderBy(org.apache.spark.sql.functions.desc("pagerank"))
+  }
+
+  def connectedComponents(spark: SparkSession, graph: Graph[Long, Double]): DataFrame = {
+    import spark.implicits._
+    graph.connectedComponents().vertices
+      .toDF("vertex_id", "component_id")
+  }
+
+  def triangleCount(spark: SparkSession, graph: Graph[Long, Double]): DataFrame = {
+    import spark.implicits._
+    // triangleCount requires canonicalised (partition-aware) graph
+    graph.partitionBy(org.apache.spark.graphx.PartitionStrategy.RandomVertexCut)
+      .triangleCount().vertices
+      .toDF("vertex_id", "triangle_count")
+  }
+}
+```
+
+- [ ] **Step 5: Create `spark-graphx/src/main/scala/io/chakraview/graph/Main.scala`**
+
+```scala
+package io.chakraview.graph
+
+import org.apache.spark.sql.SparkSession
+
+object Main {
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("graph-processing-graphx")
+      .config("spark.hadoop.fs.s3a.endpoint",
+        sys.env.getOrElse("S3_ENDPOINT", "http://localhost:9000"))
+      .config("spark.hadoop.fs.s3a.access.key",
+        sys.env.getOrElse("AWS_ACCESS_KEY_ID", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.secret.key",
+        sys.env.getOrElse("AWS_SECRET_ACCESS_KEY", "minioadmin"))
+      .config("spark.hadoop.fs.s3a.path.style.access", "true")
+      .config("spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem")
+      .getOrCreate()
+
+    val edgePath    = sys.env.getOrElse("EDGE_LIST_PATH", "s3a://chakra-lakehouse/raw/graph-edges/")
+    val outputPath  = sys.env.getOrElse("GRAPH_OUTPUT_PATH", "s3a://chakra-lakehouse/delta/graph/")
+
+    val graph = GraphBuilder.fromEdgeList(spark, edgePath)
+    println(s"Graph: ${graph.vertices.count()} vertices, ${graph.edges.count()} edges")
+
+    val pageRank = GraphAlgorithms.pageRank(spark, graph)
+    pageRank.write.mode("overwrite").parquet(s"$outputPath/pagerank/")
+    println(s"PageRank computed: ${pageRank.count()} vertices")
+
+    val cc = GraphAlgorithms.connectedComponents(spark, graph)
+    cc.write.mode("overwrite").parquet(s"$outputPath/connected-components/")
+    println(s"Connected components: ${cc.select("component_id").distinct().count()} components")
+
+    spark.stop()
+  }
+}
+```
+
+- [ ] **Step 6: Create `spark-graphx/docker-compose.yml`** (MinIO only — Spark runs locally)
+
+```yaml
+version: "3.9"
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+
+volumes:
+  minio-data:
+```
+
+`.env.example`:
+```bash
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+EDGE_LIST_PATH=s3a://chakra-lakehouse/raw/graph-edges/
+GRAPH_OUTPUT_PATH=s3a://chakra-lakehouse/delta/graph/
+```
+
+`README.md`:
+```markdown
+# Graph Processing — Spark GraphX
+
+## When to use
+Batch graph algorithms (PageRank, connected components, triangle count) on large distributed graphs.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+
+# Upload a sample edge list (src_id,dst_id,weight):
+echo -e "1,2,1.0\n2,3,0.5\n3,1,0.8\n1,4,1.2" | \
+  docker exec -i <minio-container> sh -c \
+  'mc alias set local http://localhost:9000 minioadmin minioadmin && \
+   cat > /tmp/edges.csv && \
+   mc cp /tmp/edges.csv local/chakra-lakehouse/raw/graph-edges/edges.csv'
+
+sbt assembly
+spark-submit --class io.chakraview.graph.Main --master local[*] \
+  target/scala-2.12/graph-processing-spark-graphx-assembly-0.1.0.jar
+```
+```
+
+- [ ] **Step 7: Create `neo4j-spark/build.sbt`**
+
+```scala
+ThisBuild / scalaVersion := "2.12.18"
+ThisBuild / version      := "0.1.0"
+ThisBuild / organization := "io.chakraview"
+
+val sparkVersion       = "3.5.1"
+val neo4jConnVersion   = "5.3.1"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "graph-processing-neo4j-spark",
+    libraryDependencies ++= Seq(
+      "org.apache.spark"   %% "spark-core"                  % sparkVersion   % "provided",
+      "org.apache.spark"   %% "spark-sql"                   % sparkVersion   % "provided",
+      "org.neo4j.driver"    % "neo4j-connector-apache-spark_2.12" % neo4jConnVersion,
+      "org.apache.hadoop"   % "hadoop-aws"                  % "3.3.6"        % "provided",
+    ),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf"         => MergeStrategy.concat
+      case _                        => MergeStrategy.first
+    },
+  )
+```
+
+- [ ] **Step 8: Create `neo4j-spark/src/main/scala/io/chakraview/graph/GraphQueries.scala`**
+
+```scala
+package io.chakraview.graph
+
+// Cypher queries used by the Neo4j Spark Connector.
+// Keep queries here so they can be reviewed and versioned separately from the Spark job.
+object GraphQueries {
+
+  // Load all orders with their customers
+  val ordersWithCustomers: String =
+    """MATCH (o:Order)-[:PLACED_BY]->(c:Customer)
+      |RETURN o.id AS order_id, c.id AS customer_id,
+      |       o.amount AS amount_cents, o.status AS status""".stripMargin
+
+  // Find customers with more than N orders (fraud ring seed)
+  val highVolumeCustomers: String =
+    """MATCH (c:Customer)-[:PLACED_BY]-(o:Order)
+      |WITH c, count(o) AS order_count
+      |WHERE order_count > $minOrders
+      |RETURN c.id AS customer_id, order_count""".stripMargin
+
+  // Find all nodes reachable within 3 hops from a seed customer
+  val reachableWithin3Hops: String =
+    """MATCH path = (seed:Customer {id: $customerId})-[*1..3]-(connected)
+      |RETURN DISTINCT connected.id AS node_id, labels(connected)[0] AS node_type,
+      |       length(path) AS hops""".stripMargin
+}
+```
+
+- [ ] **Step 9: Create `neo4j-spark/src/main/scala/io/chakraview/graph/Main.scala`**
+
+```scala
+package io.chakraview.graph
+
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
+
+object Main {
+  private def neo4jOptions(spark: SparkSession): Map[String, String] = Map(
+    "url"                              -> sys.env.getOrElse("NEO4J_URI",      "bolt://localhost:7687"),
+    "authentication.type"              -> "basic",
+    "authentication.basic.username"   -> sys.env.getOrElse("NEO4J_USER",     "neo4j"),
+    "authentication.basic.password"   -> sys.env.getOrElse("NEO4J_PASSWORD", "password"),
+  )
+
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("graph-processing-neo4j-spark")
+      .getOrCreate()
+
+    val opts = neo4jOptions(spark)
+
+    // 1. Read orders from CSV (source system) and bulk-load into Neo4j
+    val orders = spark.read
+      .option("header", "true")
+      .option("inferSchema", "true")
+      .csv(sys.env.getOrElse("ORDERS_PATH", "data/sample-orders.csv"))
+
+    orders.write
+      .format("org.neo4j.spark.DataSource")
+      .options(opts)
+      .option("labels",    ":Order")
+      .option("node.keys", "order_id")
+      .mode("Overwrite")
+      .save()
+    println(s"Loaded ${orders.count()} Order nodes into Neo4j")
+
+    // 2. Query graph via Cypher and pull results back as a Spark DataFrame
+    val ordersWithCustomers = spark.read
+      .format("org.neo4j.spark.DataSource")
+      .options(opts)
+      .option("query", GraphQueries.ordersWithCustomers)
+      .load()
+
+    ordersWithCustomers
+      .groupBy("customer_id")
+      .agg(count("order_id").alias("order_count"), sum("amount_cents").alias("total_cents"))
+      .orderBy(desc("order_count"))
+      .show(20)
+
+    spark.stop()
+  }
+}
+```
+
+- [ ] **Step 10: Create `neo4j-spark/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  neo4j:
+    image: neo4j:5.19-community
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt protocol
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password}
+      NEO4J_PLUGINS: '["graph-data-science"]'
+      NEO4J_dbms_security_procedures_unrestricted: "gds.*"
+    volumes:
+      - neo4j-data:/data
+      - ./config/neo4j.conf:/conf/neo4j.conf
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+      interval: 15s
+      retries: 8
+
+volumes:
+  neo4j-data:
+```
+
+`config/neo4j.conf`:
+```
+# Increase heap for GDS algorithms
+dbms.memory.heap.initial_size=1G
+dbms.memory.heap.max_size=2G
+dbms.memory.pagecache.size=512M
+```
+
+`.env.example`:
+```bash
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
+ORDERS_PATH=data/sample-orders.csv
+```
+
+`README.md`:
+```markdown
+# Graph Processing — Neo4j + Spark
+
+## When to use
+Need Cypher traversal queries (variable-depth paths) AND Spark-scale bulk ingestion/extraction.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d       # Neo4j Browser: http://localhost:7474
+
+sbt assembly
+spark-submit --class io.chakraview.graph.Main --master local[*] \
+  --packages org.neo4j.driver:neo4j-connector-apache-spark_2.12:5.3.1 \
+  target/scala-2.12/graph-processing-neo4j-spark-assembly-0.1.0.jar
+```
+
+Explore the graph in Neo4j Browser at http://localhost:7474:
+```cypher
+MATCH (o:Order)-[:PLACED_BY]->(c:Customer) RETURN o, c LIMIT 25
+```
+```
+
+- [ ] **Step 11: Verify required files**
+
+```bash
+for variant in spark-graphx neo4j-spark; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/graph-processing/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All graph-processing variant files present"
+```
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add patterns/graph-processing/
+git commit -m "feat: graph-processing — spark-graphx (PageRank/CC) and neo4j-spark (Cypher+Spark) variants"
+```
+
+---
+
+### Task 19: workflow-orchestration (Pattern README + 3 Variants)
+
+**Files:**
+- Create: `patterns/workflow-orchestration/README.md`
+- Variant `airflow`: `README.md`, `pyproject.toml`, `dags/data_pipeline_dag.py`, `docker-compose.yml`, `.env.example`
+- Variant `prefect`: `README.md`, `pyproject.toml`, `flows/data_pipeline_flow.py`, `docker-compose.yml`, `.env.example`
+- Variant `dagster`: `README.md`, `pyproject.toml`, `pipeline/assets.py`, `pipeline/definitions.py`, `docker-compose.yml`, `.env.example`
+
+- [ ] **Step 1: Create `patterns/workflow-orchestration/README.md`**
+
+```markdown
+# Workflow Orchestration
+
+Airflow, Prefect, or Dagster schedule and coordinate data pipeline tasks.
+The glue between every other pattern.
+
+## Variants
+
+| Variant | Abstraction | Differentiator | Pull branch |
+|---|---|---|---|
+| `airflow` | DAG of operators | 600+ providers, industry standard | `pattern/workflow-orchestration/airflow` |
+| `prefect` | Python-native flows | Modern ergonomics, dynamic tasks | `pattern/workflow-orchestration/prefect` |
+| `dagster` | Software-defined assets | Asset lineage, strong observability | `pattern/workflow-orchestration/dagster` |
+
+## Choosing between variants
+
+- **airflow**: large org, many integrations, existing Airflow investment.
+- **prefect**: Python-first team, need dynamic task generation, want modern UX without Airflow ops overhead.
+- **dagster**: asset-centric thinking, need per-materialisation metadata and lineage graph out of the box.
+```
+
+- [ ] **Step 2: Create `airflow/dags/data_pipeline_dag.py`**
+
+```python
+"""
+Airflow reference DAG — demonstrates common operator patterns.
+
+Shows: BashOperator, PythonOperator, SparkSubmitOperator, cross-task dependencies,
+retry config, SLA alerts, and task groups.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from airflow.operators.python import PythonOperator
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.utils.task_group import TaskGroup
+
+
+def check_data_quality(**context) -> None:
+    """Run basic data quality checks and fail the task if they don't pass."""
+    ds = context["ds"]
+    print(f"Running quality checks for partition: {ds}")
+    # Replace with actual quality check logic
+    row_count = 1000   # placeholder
+    if row_count == 0:
+        raise ValueError(f"No rows found for {ds} — aborting pipeline")
+    print(f"Quality check passed: {row_count} rows")
+
+
+def notify_success(**context) -> None:
+    ds = context["ds"]
+    print(f"Pipeline succeeded for {ds}. Notifying stakeholders.")
+    # Replace with Slack/PagerDuty/email notification
+
+
+default_args = {
+    "owner": "data-engineering",
+    "depends_on_past": False,
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "sla": timedelta(hours=2),
+    "email_on_failure": False,
+}
+
+with DAG(
+    dag_id="data_pipeline",
+    default_args=default_args,
+    description="Reference ETL pipeline: extract → transform → validate → load → notify",
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    max_active_runs=1,
+    tags=["reference", "orchestration"],
+) as dag:
+
+    with TaskGroup("extract") as extract_group:
+        extract_orders = BashOperator(
+            task_id="extract_orders",
+            bash_command="echo 'Extracting orders for {{ ds }}'",
+        )
+        extract_customers = BashOperator(
+            task_id="extract_customers",
+            bash_command="echo 'Extracting customers for {{ ds }}'",
+        )
+
+    transform = SparkSubmitOperator(
+        task_id="transform",
+        application="/opt/spark-apps/transform-assembly-0.1.0.jar",
+        name="transform-{{ ds }}",
+        conf={"spark.driver.memory": "2g"},
+    )
+
+    quality_check = PythonOperator(
+        task_id="quality_check",
+        python_callable=check_data_quality,
+    )
+
+    load = BashOperator(
+        task_id="load_to_lakehouse",
+        bash_command="echo 'Loading to lakehouse for {{ ds }}'",
+    )
+
+    notify = PythonOperator(
+        task_id="notify_success",
+        python_callable=notify_success,
+        trigger_rule="all_success",
+    )
+
+    extract_group >> transform >> quality_check >> load >> notify
+```
+
+- [ ] **Step 3: Create `airflow/pyproject.toml`**
+
+```toml
+[project]
+name = "workflow-orchestration-airflow"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "apache-airflow>=2.9.3",
+    "apache-airflow-providers-apache-spark>=4.9.0",
+]
+```
+
+- [ ] **Step 4: Create `airflow/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  airflow:
+    image: apache/airflow:2.9.3-python3.11
+    command: standalone
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-dev-secret}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+
+volumes:
+  airflow-logs:
+```
+
+`.env.example`:
+```bash
+AIRFLOW_SECRET_KEY=dev-secret-change-in-prod
+```
+
+`README.md`:
+```markdown
+# Workflow Orchestration — Airflow
+
+## When to use
+Large org, many data source integrations (600+ providers), existing Airflow investment.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d
+# UI: http://localhost:8080  (admin / admin on first run)
+# Enable and trigger dag: data_pipeline
+```
+
+Key files:
+- `dags/data_pipeline_dag.py` — reference DAG with BashOperator, PythonOperator, SparkSubmitOperator, TaskGroup
+```
+
+- [ ] **Step 5: Create `prefect/flows/data_pipeline_flow.py`**
+
+```python
+"""
+Prefect reference flow — demonstrates flows, tasks, caching, retries, and subflows.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from prefect import flow, task
+from prefect.tasks import task_input_hash
+
+
+@task(
+    cache_key_fn=task_input_hash,
+    cache_expiration=timedelta(hours=1),
+    retries=2,
+    retry_delay_seconds=30,
+)
+def extract_orders(date: str) -> list[dict]:
+    """Extract orders for a given date. Cached for 1h so retries are cheap."""
+    print(f"Extracting orders for {date}")
+    # Replace with actual extraction logic (JDBC, API, S3, etc.)
+    return [
+        {"order_id": "ord-001", "amount_cents": 4999, "date": date},
+        {"order_id": "ord-002", "amount_cents": 12999, "date": date},
+    ]
+
+
+@task(retries=1)
+def transform_orders(raw: list[dict]) -> list[dict]:
+    """Apply business rules and compute derived fields."""
+    return [
+        {
+            **row,
+            "amount_usd":  row["amount_cents"] / 100.0,
+            "is_high_value": row["amount_cents"] > 10_000,
+        }
+        for row in raw
+        if row.get("order_id")
+    ]
+
+
+@task
+def load_to_lakehouse(data: list[dict], path: str) -> int:
+    """Write transformed data to the lakehouse (Iceberg/Delta on S3)."""
+    print(f"Loading {len(data)} rows to {path}")
+    # Replace with actual write logic (PySpark, pyarrow, etc.)
+    return len(data)
+
+
+@task
+def notify(count: int, date: str) -> None:
+    print(f"Pipeline complete for {date}: {count} rows loaded")
+
+
+@flow(name="data-pipeline", log_prints=True)
+def data_pipeline(date: str = "2026-01-01") -> None:
+    """Main pipeline flow. Run manually or schedule via Prefect deployment."""
+    raw        = extract_orders(date)
+    transformed = transform_orders(raw)
+    count      = load_to_lakehouse(
+        transformed,
+        path=f"s3://chakra-lakehouse/delta/orders/{date}/",
+    )
+    notify(count, date)
+
+
+if __name__ == "__main__":
+    data_pipeline()
+```
+
+- [ ] **Step 6: Create `prefect/pyproject.toml`**
+
+```toml
+[project]
+name = "workflow-orchestration-prefect"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "prefect>=2.20.0",
+    "prefect-aws>=0.5.0",
+]
+
+[project.scripts]
+run-flow = "flows.data_pipeline_flow:data_pipeline"
+```
+
+- [ ] **Step 7: Create `prefect/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  prefect-server:
+    image: prefecthq/prefect:2-latest
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+    environment:
+      PREFECT_UI_URL: http://localhost:4200
+      PREFECT_API_URL: http://localhost:4200/api
+    volumes:
+      - prefect-data:/root/.prefect
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200/api/health"]
+      interval: 10s
+      retries: 8
+
+volumes:
+  prefect-data:
+```
+
+`.env.example`:
+```bash
+PREFECT_API_URL=http://localhost:4200/api
+```
+
+`README.md`:
+```markdown
+# Workflow Orchestration — Prefect
+
+## When to use
+Python-first team. Dynamic task generation. Modern UX. No desire for Airflow's scheduler ops.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+docker compose up -d         # Prefect UI: http://localhost:4200
+pip install -e .
+export PREFECT_API_URL=http://localhost:4200/api
+
+# Run flow directly:
+python flows/data_pipeline_flow.py
+
+# Or deploy with a schedule:
+prefect deployment build flows/data_pipeline_flow.py:data_pipeline \
+  --name daily --cron "0 6 * * *" --apply
+prefect worker start --pool default-agent-pool
+```
+```
+
+- [ ] **Step 8: Create `dagster/pipeline/assets.py`**
+
+```python
+"""
+Dagster software-defined assets — reference pipeline.
+
+Each asset represents a data artifact. Dagster tracks lineage between assets,
+records materialisation metadata, and schedules re-materialisation on failure or schedule.
+"""
+
+from __future__ import annotations
+
+from dagster import (
+    AssetExecutionContext,
+    MetadataValue,
+    asset,
+)
+
+
+@asset(
+    group_name="orders",
+    description="Raw orders loaded from source system",
+)
+def raw_orders(context: AssetExecutionContext) -> list[dict]:
+    data = [
+        {"order_id": "ord-001", "amount_cents": 4999,  "status": "confirmed"},
+        {"order_id": "ord-002", "amount_cents": 12999, "status": "shipped"},
+        {"order_id": "ord-003", "amount_cents": 899,   "status": "pending"},
+    ]
+    context.add_output_metadata({
+        "row_count":  MetadataValue.int(len(data)),
+        "preview":    MetadataValue.json(data[:2]),
+    })
+    return data
+
+
+@asset(
+    group_name="orders",
+    description="Orders with USD amounts, quality checks applied",
+)
+def transformed_orders(
+    context: AssetExecutionContext,
+    raw_orders: list[dict],
+) -> list[dict]:
+    result = [
+        {**row, "amount_usd": row["amount_cents"] / 100.0}
+        for row in raw_orders
+        if row.get("order_id") and row["amount_cents"] > 0
+    ]
+    context.add_output_metadata({
+        "row_count":        MetadataValue.int(len(result)),
+        "rows_dropped":     MetadataValue.int(len(raw_orders) - len(result)),
+    })
+    return result
+
+
+@asset(
+    group_name="orders",
+    description="Daily order summary aggregated for BI consumption",
+)
+def orders_summary(
+    context: AssetExecutionContext,
+    transformed_orders: list[dict],
+) -> dict:
+    total_revenue = sum(r["amount_usd"] for r in transformed_orders)
+    summary = {
+        "order_count":      len(transformed_orders),
+        "total_revenue_usd": round(total_revenue, 2),
+        "avg_order_value":  round(total_revenue / max(len(transformed_orders), 1), 2),
+    }
+    context.add_output_metadata({
+        "summary":          MetadataValue.json(summary),
+        "total_revenue_usd": MetadataValue.float(summary["total_revenue_usd"]),
+    })
+    return summary
+```
+
+- [ ] **Step 9: Create `dagster/pipeline/definitions.py`**
+
+```python
+from dagster import (
+    Definitions,
+    ScheduleDefinition,
+    define_asset_job,
+    load_assets_from_modules,
+)
+
+from . import assets
+
+all_assets = load_assets_from_modules([assets])
+
+daily_pipeline = define_asset_job(
+    name="daily_pipeline",
+    selection="*",
+)
+
+daily_schedule = ScheduleDefinition(
+    job=daily_pipeline,
+    cron_schedule="@daily",
+    default_status=dagster.DefaultScheduleStatus.RUNNING,
+)
+
+defs = Definitions(
+    assets=all_assets,
+    jobs=[daily_pipeline],
+    schedules=[daily_schedule],
+)
+```
+
+- [ ] **Step 10: Create `dagster/pyproject.toml`**
+
+```toml
+[project]
+name = "workflow-orchestration-dagster"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "dagster>=1.7.0",
+    "dagster-webserver>=1.7.0",
+]
+
+[tool.dagster]
+module_name = "pipeline.definitions"
+```
+
+- [ ] **Step 11: Create `dagster/docker-compose.yml`**
+
+```yaml
+version: "3.9"
+
+services:
+  dagster-webserver:
+    image: ghcr.io/dagster-io/dagster:1.7.0
+    command: dagster-webserver -h 0.0.0.0 -p 3000
+    ports:
+      - "3000:3000"
+    environment:
+      DAGSTER_HOME: /opt/dagster/dagster_home
+    volumes:
+      - dagster-home:/opt/dagster/dagster_home
+      - .:/opt/dagster/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/server_info"]
+      interval: 15s
+      retries: 8
+
+  dagster-daemon:
+    image: ghcr.io/dagster-io/dagster:1.7.0
+    command: dagster-daemon run
+    environment:
+      DAGSTER_HOME: /opt/dagster/dagster_home
+    volumes:
+      - dagster-home:/opt/dagster/dagster_home
+      - .:/opt/dagster/app
+    depends_on:
+      dagster-webserver:
+        condition: service_healthy
+
+volumes:
+  dagster-home:
+```
+
+`.env.example`:
+```bash
+DAGSTER_HOME=/opt/dagster/dagster_home
+```
+
+`README.md`:
+```markdown
+# Workflow Orchestration — Dagster
+
+## When to use
+Asset-centric thinking. Need per-materialisation metadata and lineage graph out of the box.
+
+## How to run locally
+
+```bash
+cp .env.example .env
+pip install -e .
+docker compose up -d        # UI: http://localhost:3000
+
+# Or run locally without Docker:
+dagster dev -m pipeline.definitions
+```
+
+Key files:
+- `pipeline/assets.py` — software-defined assets with metadata and lineage
+- `pipeline/definitions.py` — job, schedule, and Definitions wiring
+```
+
+- [ ] **Step 12: Verify all workflow-orchestration variants**
+
+```bash
+for variant in airflow prefect dagster; do
+  for f in README.md docker-compose.yml .env.example; do
+    path="patterns/workflow-orchestration/variants/$variant/$f"
+    [ -f "$path" ] || { echo "MISSING: $path"; exit 1; }
+  done
+done
+echo "All workflow-orchestration variant files present"
+```
+
+- [ ] **Step 13: Commit**
+
+```bash
+git add patterns/workflow-orchestration/
+git commit -m "feat: workflow-orchestration — airflow (TaskGroup DAG), prefect (cached flow), dagster (SDA) variants"
+```
+
+---
+
+### Task 20: CI Workflows and sync-pattern-branches.sh
+
+**Files:**
+- Create: `.github/workflows/deploy-docs.yml`
+- Create: `.github/workflows/adr-lint.yml`
+- Create: `.github/workflows/validate-variants.yml`
+- Create: `tooling/sync-pattern-branches.sh`
+
+- [ ] **Step 1: Create `.github/workflows/deploy-docs.yml`**
+
+```yaml
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install MkDocs Material
+        run: pip install -r requirements-docs.txt
+
+      - name: Deploy to GitHub Pages
+        run: mkdocs gh-deploy --force
+```
+
+- [ ] **Step 2: Create `.github/workflows/adr-lint.yml`**
+
+```yaml
+name: ADR Lint
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/adrs/**"]
+  pull_request:
+    paths: ["docs/adrs/**"]
+
+jobs:
+  lint:
+    name: Verify ADR required sections
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check each ADR has required sections
+        run: |
+          failed=0
+          for adr in docs/adrs/ADR-*.md; do
+            for section in "## Context" "## Decision" "## Consequences"; do
+              if ! grep -q "$section" "$adr"; then
+                echo "MISSING '$section' in $adr"
+                failed=1
+              fi
+            done
+          done
+          if [ $failed -eq 0 ]; then
+            echo "All ADRs have required sections."
+          fi
+          exit $failed
+```
+
+- [ ] **Step 3: Create `.github/workflows/validate-variants.yml`**
+
+```yaml
+name: Validate Variants
+
+on:
+  push:
+    branches: [main]
+    paths: ["patterns/**"]
+  pull_request:
+    paths: ["patterns/**"]
+
+jobs:
+  validate:
+    name: Check required files in every variant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify README.md, docker-compose.yml, .env.example in each variant
+        run: |
+          failed=0
+          # Find all variant directories (depth 3 under patterns/: patterns/<pattern>/variants/<stack>/)
+          while IFS= read -r -d '' variant_dir; do
+            # Cloud-only variants (e.g., dbt-snowflake) don't need docker-compose.yml
+            if [ -f "$variant_dir/.cloud-only" ]; then
+              echo "  skip (cloud-only): $variant_dir"
+              continue
+            fi
+            for required in README.md docker-compose.yml .env.example; do
+              if [ ! -f "$variant_dir/$required" ]; then
+                echo "MISSING: $variant_dir/$required"
+                failed=1
+              fi
+            done
+          done < <(find patterns -mindepth 3 -maxdepth 3 -type d -print0)
+          if [ $failed -eq 0 ]; then
+            echo "All variants valid."
+          fi
+          exit $failed
+```
+
+- [ ] **Step 4: Create `tooling/sync-pattern-branches.sh`**
+
+```bash
+#!/usr/bin/env bash
+# sync-pattern-branches.sh
+#
+# For each variant in patterns/<pattern>/variants/<stack>/,
+# creates or force-resets a branch named pattern/<pattern>/<stack>
+# containing only that variant's files at the repo root.
+#
+# Run from the repo root after adding or updating any variant in main.
+# Requires: git, a GitHub remote named 'origin', push access.
+#
+# Usage:
+#   ./tooling/sync-pattern-branches.sh             # sync all variants
+#   ./tooling/sync-pattern-branches.sh batch-lakehouse  # sync one pattern only
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+MAIN_BRANCH="main"
+FILTER_PATTERN="${1:-}"   # optional: sync only this pattern name
+
+cd "$REPO_ROOT"
+
+# Ensure we start on main and it is clean
+git checkout "$MAIN_BRANCH"
+if [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: working tree is dirty. Commit or stash changes before syncing branches."
+  exit 1
+fi
+
+MAIN_SHA="$(git rev-parse --short HEAD)"
+echo "Syncing pattern branches from main ($MAIN_SHA)..."
+
+synced=0
+skipped=0
+
+for pattern_dir in patterns/*/variants/*/; do
+  [[ -d "$pattern_dir" ]] || continue
+
+  # Parse path: patterns/<pattern>/variants/<stack>/
+  IFS='/' read -ra parts <<< "${pattern_dir%/}"
+  pattern="${parts[1]}"
+  stack="${parts[3]}"
+
+  if [[ -n "$FILTER_PATTERN" && "$pattern" != "$FILTER_PATTERN" ]]; then
+    ((skipped++))
+    continue
+  fi
+
+  branch="pattern/${pattern}/${stack}"
+  echo "→ $branch"
+
+  # Stage variant files in a temp directory
+  tmpdir="$(mktemp -d)"
+  cp -r "$REPO_ROOT/$pattern_dir/." "$tmpdir/"
+
+  # Create empty root commit for the branch
+  EMPTY_TREE="$(git hash-object -t tree /dev/null)"
+  EMPTY_COMMIT="$(git commit-tree "$EMPTY_TREE" -m "init: pattern branch root")"
+  git branch -f "$branch" "$EMPTY_COMMIT"
+
+  # Populate via worktree (never touches the main working tree)
+  worktree_dir="$(mktemp -d)"
+  git worktree add --quiet "$worktree_dir" "$branch"
+
+  cp -r "$tmpdir/." "$worktree_dir/"
+
+  (
+    cd "$worktree_dir"
+    git add --all
+    git commit -m "chore: sync $branch from main ($MAIN_SHA)"
+  )
+
+  git push origin "$branch" --force
+  git worktree remove "$worktree_dir" --force
+  rm -rf "$tmpdir"
+
+  ((synced++))
+done
+
+git checkout "$MAIN_BRANCH"
+echo ""
+echo "Done. Synced: $synced branches. Skipped: $skipped branches."
+```
+
+- [ ] **Step 5: Make the script executable**
+
+```bash
+chmod +x tooling/sync-pattern-branches.sh
+```
+
+- [ ] **Step 6: Verify CI workflow files are valid YAML**
+
+```bash
+python3 -c "
+import yaml, sys
+for f in [
+    '.github/workflows/deploy-docs.yml',
+    '.github/workflows/adr-lint.yml',
+    '.github/workflows/validate-variants.yml',
+]:
+    yaml.safe_load(open(f))
+    print(f'OK: {f}')
+"
+```
+
+Expected: three `OK:` lines, no exceptions.
+
+- [ ] **Step 7: Run validate-variants check locally against the patterns built so far**
+
+```bash
+failed=0
+while IFS= read -r -d '' variant_dir; do
+  [ -f "$variant_dir/.cloud-only" ] && continue
+  for required in README.md docker-compose.yml .env.example; do
+    [ -f "$variant_dir/$required" ] || { echo "MISSING: $variant_dir/$required"; failed=1; }
+  done
+done < <(find patterns -mindepth 3 -maxdepth 3 -type d -print0)
+[ $failed -eq 0 ] && echo "All variants valid." || exit 1
+```
+
+Expected: `All variants valid.`
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add .github/workflows/ tooling/sync-pattern-branches.sh
+git commit -m "feat: CI workflows (deploy-docs, adr-lint, validate-variants) and sync-pattern-branches.sh"
+```
+
+---
+
+## Self-Review
+
+### Spec coverage check
+
+| Spec requirement | Covered by |
+|---|---|
+| 9 patterns | Tasks 11–19 |
+| 22 variants | Tasks 11–19 (3+2+3+2+2+2+3+2+3 = 22) |
+| Pattern README per pattern | Tasks 11–19 Step 1 in each |
+| Per-variant README.md | Every variant in Tasks 11–19 |
+| Per-variant docker-compose.yml | Every variant |
+| Per-variant .env.example | Every variant |
+| Per-variant build file (sbt/pom/pyproject) | All code variants |
+| MkDocs Material site | Tasks 1–2 |
+| Landscape intro | Task 3 |
+| Decision matrix | Task 4 |
+| 10 ADRs with "when this stops being correct" | Tasks 5–9 |
+| 9 pattern docs pages | Task 10 |
+| sync-pattern-branches.sh | Task 20 |
+| deploy-docs.yml CI | Task 20 |
+| adr-lint.yml CI | Task 20 |
+| validate-variants.yml CI | Task 20 |
+
+All spec requirements covered. No gaps found.
+
+### Placeholder scan
+
+- No "TBD" or "TODO" in plan steps.
+- Code marked `# Replace with actual ...` is intentional — it marks extension points in a boilerplate starter, not incomplete plan steps.
+- No steps describe what to do without showing code.
+
+### Type consistency
+
+- `SparkSessions.iceberg()` is defined in Task 11 and referenced in Task 15 (`batch/BatchJob.scala`). ✅
+- `IcebergWriter.append()` is defined in Task 11 and referenced in Task 15. ✅
+- `EventSchema.schema` is defined in Task 12 (`spark-delta`) and referenced in Task 15 (`spark-streaming-batch-delta/StreamingJob.scala`). ✅
+- Dagster `DefaultScheduleStatus` import missing in `definitions.py` — fix: add `import dagster` or use full path. Fix applied:
+
+In `dagster/pipeline/definitions.py`, replace:
+```python
+    default_status=dagster.DefaultScheduleStatus.RUNNING,
+```
+with:
+```python
+    default_status=DefaultScheduleStatus.RUNNING,
+```
+and add to imports:
+```python
+from dagster import (
+    DefaultScheduleStatus,
+    Definitions,
+    ScheduleDefinition,
+    define_asset_job,
+    load_assets_from_modules,
+)
+```
