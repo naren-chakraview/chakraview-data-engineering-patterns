@@ -1,0 +1,31 @@
+name: ADR Lint
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/adrs/**"]
+  pull_request:
+    paths: ["docs/adrs/**"]
+
+jobs:
+  lint:
+    name: Verify ADR required sections
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check each ADR has required sections
+        run: |
+          failed=0
+          for adr in docs/adrs/ADR-*.md; do
+            for section in "## Context" "## Decision" "## Consequences"; do
+              if ! grep -q "$section" "$adr"; then
+                echo "MISSING '$section' in $adr"
+                failed=1
+              fi
+            done
+          done
+          if [ $failed -eq 0 ]; then
+            echo "All ADRs have required sections."
+          fi
+          exit $failed

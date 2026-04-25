@@ -1,0 +1,37 @@
+name: Validate Variants
+
+on:
+  push:
+    branches: [main]
+    paths: ["patterns/**"]
+  pull_request:
+    paths: ["patterns/**"]
+
+jobs:
+  validate:
+    name: Check required files in every variant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify README.md, docker-compose.yml, .env.example in each variant
+        run: |
+          failed=0
+          # Find all variant directories (depth 3 under patterns/: patterns/<pattern>/variants/<stack>/)
+          while IFS= read -r -d '' variant_dir; do
+            # Cloud-only variants (e.g., dbt-snowflake) don't need docker-compose.yml
+            if [ -f "$variant_dir/.cloud-only" ]; then
+              echo "  skip (cloud-only): $variant_dir"
+              continue
+            fi
+            for required in README.md docker-compose.yml .env.example; do
+              if [ ! -f "$variant_dir/$required" ]; then
+                echo "MISSING: $variant_dir/$required"
+                failed=1
+              fi
+            done
+          done < <(find patterns -mindepth 3 -maxdepth 3 -type d -print0)
+          if [ $failed -eq 0 ]; then
+            echo "All variants valid."
+          fi
+          exit $failed
