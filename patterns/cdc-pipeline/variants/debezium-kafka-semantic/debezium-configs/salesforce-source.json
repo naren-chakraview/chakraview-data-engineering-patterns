@@ -1,0 +1,13 @@
+{
+  "name": "salesforce-accounts-source",
+  "config": {
+    "connector.class": "io.debezium.connector.salesforce.SalesforceConnector",
+    "salesforce.instance": "your-instance.salesforce.com",
+    "salesforce.consumer.key": "${SALESFORCE_CONSUMER_KEY}",
+    "salesforce.consumer.secret": "${SALESFORCE_CONSUMER_SECRET}",
+    "salesforce.user": "${SALESFORCE_USER}",
+    "salesforce.password": "${SALESFORCE_PASSWORD}",
+    "topic.prefix": "salesforce",
+    "salesforce.sobject.include.list": "Account"
+  }
+}

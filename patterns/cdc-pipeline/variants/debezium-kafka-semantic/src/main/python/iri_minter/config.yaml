@@ -1,0 +1,37 @@
+# IRI Minter Configuration
+
+base_iri: "https://company.com"
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  input_topics:
+    - "postgres.public.customers"
+    - "salesforce.accounts"
+    - "stripe.customers"
+  output_topic: "enriched.customers"
+  consumer_group: "iri-minter-group"
+
+entity_rules:
+  customer:
+    key_fields: ["email", "domain"]
+    source_topics:
+      - "postgres.public.customers"
+      - "salesforce.accounts"
+      - "stripe.customers"
+
+  invoice:
+    key_fields: ["invoice_id", "source"]
+    source_topics:
+      - "stripe.invoices"
+
+  transaction:
+    key_fields: ["transaction_id", "source"]
+    source_topics:
+      - "stripe.transactions"
+
+deduplication:
+  enabled: true
+  cache_size: 10000
+  rules:
+    customer:
+      match_fields: ["email", "domain"]
