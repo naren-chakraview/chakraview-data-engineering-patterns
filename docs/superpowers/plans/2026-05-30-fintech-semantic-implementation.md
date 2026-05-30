@@ -1655,6 +1655,72 @@ Due to length constraints, I'll provide the structure for the remaining phases i
 
 ---
 
+### Task 46: Update Portfolio Documentation & GitHub Pages
+
+**Files:**
+- Modify: `naren-chakraview.github.io/index.html`
+- Modify: `chakraview-data-engineering-patterns/docs/index.md`
+- Create: `chakraview-data-engineering-patterns/blog/2026-05-30-fintech-semantic-medallion.md`
+- Create: `chakraview-enterprise-modernization/docs/case-study/phase-2-semantic-unification/README.md`
+
+- [ ] **Step 1: Update portfolio landing page**
+
+Add fintech semantic integration case study to the portfolio projects section:
+- Link to `chakraview-data-engineering-patterns/docs/case-study/fintech-semantic-integration/`
+- Description: "Semantic medallion architecture applied to fintech data mesh"
+- Tags: RDF, SPARQL, semantic modeling, data unification
+
+- [ ] **Step 2: Update data-engineering-patterns documentation index**
+
+Add three new pattern overviews to `docs/index.md`:
+- Semantic CDC (entity resolution at CDC layer)
+- Semantic Batch Lakehouse (Silver → RDF conversion)
+- Semantic Federated Query (dual SQL + SPARQL access)
+
+Link each to `patterns/semantic-{pattern}/README.md`
+
+- [ ] **Step 3: Update PATTERN_LINKS.md**
+
+Add entries for semantic patterns:
+```
+## Semantic Medallion Patterns
+- [Semantic CDC](patterns/semantic-cdc/) - Entity resolution via IRI minting
+- [Semantic Batch Lakehouse](patterns/semantic-batch-lakehouse/) - RDF generation from Silver
+- [Semantic Federated Query](patterns/semantic-federated-query/) - Unified SQL + SPARQL access
+```
+
+- [ ] **Step 4: Update enterprise-modernization Phase 2**
+
+Create Phase 2 case study documentation linking fintech example:
+- `docs/case-study/phase-2-semantic-unification/README.md`
+- Point to fintech data mesh as primary case study
+- Link to churn analysis scenario in `chakraview-data-engineering-patterns`
+
+- [ ] **Step 5: Add blog post to portfolio**
+
+Create `blog/2026-05-30-fintech-semantic-medallion.md` with link on portfolio landing page
+
+- [ ] **Step 6: Verify all cross-links**
+
+Test that:
+- Portfolio landing page → fintech case study works
+- Data patterns index → semantic patterns works
+- Enterprise modernization Phase 2 → fintech example works
+- Blog post accessible from portfolio
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add naren-chakraview.github.io/index.html \
+        chakraview-data-engineering-patterns/docs/index.md \
+        chakraview-data-engineering-patterns/PATTERN_LINKS.md \
+        chakraview-data-engineering-patterns/blog/ \
+        chakraview-enterprise-modernization/docs/case-study/phase-2-semantic-unification/
+git commit -m "docs: integrate fintech semantic medallion into portfolio documentation"
+```
+
+---
+
 ## Execution Handoff
 
 Plan complete and saved to `docs/superpowers/plans/2026-05-30-fintech-semantic-implementation.md`.
