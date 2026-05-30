@@ -1,0 +1,33 @@
+version: '3.8'
+services:
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_S3_ENDPOINT: http://minio:9000
+      WAREHOUSE_PATH: s3://warehouse/
+    ports:
+      - "8181:8181"
+    depends_on:
+      - minio
+
+  tdb2:
+    image: apache/jena:4.9.0
+    ports:
+      - "3030:3030"
+    volumes:
+      - tdb2_data:/usr/local/jena/tdb2
+
+volumes:
+  tdb2_data:

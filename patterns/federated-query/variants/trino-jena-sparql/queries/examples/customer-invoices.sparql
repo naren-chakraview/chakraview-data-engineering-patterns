@@ -1,0 +1,9 @@
+PREFIX : <https://company.com/ontology#>
+
+SELECT ?customer ?customerName ?invoice ?amount WHERE {
+  ?customer a :Customer .
+  ?customer :hasName ?customerName .
+  ?customer :hasInvoice ?invoice .
+  ?invoice :amount ?amount .
+}
+ORDER BY ?customerName
