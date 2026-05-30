@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from rdflib import Graph, Literal, Namespace, URIRef
+from rdflib import Graph, Literal, Namespace, RDF, URIRef
 
 from .iri_resolver import IriResolver
 
@@ -71,7 +71,7 @@ class SilverToRdfTransformer:
             iri_ref = URIRef(iri)
 
             # Add type triple
-            output_graph.add((iri_ref, self.FINTECH.type, self.FINTECH.Customer))
+            output_graph.add((iri_ref, RDF.type, self.FINTECH.Customer))
 
             # Add customer properties
             output_graph.add((iri_ref, self.FINTECH.customerName, Literal(row["name"])))
@@ -162,7 +162,7 @@ class SilverToRdfTransformer:
                 continue
 
             # Add type triple
-            output_graph.add((account_iri, self.FINTECH.type, self.FINTECH.Account))
+            output_graph.add((account_iri, RDF.type, self.FINTECH.Account))
 
             # Add account properties
             output_graph.add(

@@ -177,6 +177,38 @@ class TestAccountsRdfE2E:
         # Verify the system is 'accounts'
         assert str(results[0][0]) == "accounts", "sourceSystem should be 'accounts'"
 
+    def test_rdf_type_uses_standard_vocabulary(self, transformer, sample_customers_df, sample_accounts_df):
+        """Test: Type triples use standard rdf:type vocabulary, not custom predicates"""
+        from rdflib import RDF
+
+        # Transform customer and account data
+        customers_graph = transformer.transform_customers_to_rdf(sample_customers_df)
+        accounts_graph = transformer.transform_accounts_to_rdf(sample_accounts_df, sample_customers_df)
+
+        # Query for customers using standard rdf:type
+        query = """
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            PREFIX fintech: <https://chakracommerce.com/ontology/fintech/>
+            SELECT ?customer WHERE {
+                ?customer rdf:type fintech:Customer .
+            }
+        """
+        customer_results = list(customers_graph.query(query))
+        assert len(customer_results) >= 3, \
+            f"All 3 customers must use standard rdf:type, got {len(customer_results)}"
+
+        # Query for accounts using standard rdf:type
+        query = """
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            PREFIX fintech: <https://chakracommerce.com/ontology/fintech/>
+            SELECT ?account WHERE {
+                ?account rdf:type fintech:Account .
+            }
+        """
+        account_results = list(accounts_graph.query(query))
+        assert len(account_results) >= 3, \
+            f"All 3 accounts must use standard rdf:type, got {len(account_results)}"
+
     def test_rdf_graph_union(
         self, transformer, sample_customers_df, sample_accounts_df
     ):
