@@ -1,0 +1,11 @@
+{
+  "name": "stripe-events-source",
+  "config": {
+    "connector.class": "io.debezium.connector.http.HttpConnector",
+    "http.base.url": "https://api.stripe.com",
+    "http.auth.type": "Bearer",
+    "http.auth.bearer.token": "${STRIPE_API_KEY}",
+    "topic.prefix": "stripe",
+    "poll.interval.ms": 10000
+  }
+}
