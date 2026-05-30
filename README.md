@@ -23,6 +23,45 @@ Pick a pattern, pick a stack, pull the branch — done.
 
 ---
 
+## 🔗 Semantic Medallion: Entity Unification via RDF
+
+**NEW:** Transform your data estate into a unified knowledge graph with **semantic medallion** — extends 3 core patterns with RDF/SPARQL for cross-source entity deduplication and ontology-driven analytics.
+
+### Semantic Pattern Variants
+
+| Pattern | Semantic Variant | What it does |
+|---|---|---|
+| **CDC Pipeline** | `debezium-kafka-semantic` | Real-time IRI minting + entity resolution at ingest |
+| **Batch Lakehouse** | `spark-iceberg-semantic` | Converts Silver tables to RDF triples (Iceberg Gold + Jena TDB2) |
+| **Federated Query** | `trino-jena-sparql` | Unifies SQL + SPARQL queries via IRI mapping + shared ontology |
+
+### Use Cases
+
+- **Entity Unification**: Single IRI for customers across Salesforce, Stripe, Postgres, etc.
+- **Semantic Reasoning**: Ontology-driven queries (e.g., "at-risk customers with 3+ support tickets + failed payments")
+- **Data Catalog**: RDF triples ARE self-describing data catalog
+- **Knowledge Graph**: Full provenance and relationships embedded in data
+
+### Quick Start
+
+```bash
+# Explore semantic medallion architecture
+git clone https://github.com/naren-chakraview/chakraview-data-engineering-patterns
+cd chakraview-data-engineering-patterns
+cat docs/patterns/semantic-medallion.md          # Pattern overview
+cat docs/adrs/ADR-0011-semantic-medallion-approach.md  # Design decisions
+cat docs/landscape/semantic-medallion.md         # Positioning
+
+# Deploy Phase 1-4 incrementally
+git clone --branch pattern/cdc-pipeline/debezium-kafka-semantic \
+  https://github.com/naren-chakraview/chakraview-data-engineering-patterns \
+  my-semantic-cdc
+```
+
+📚 **Read More**: [Semantic Medallion Pattern](https://naren-chakraview.github.io/chakraview-data-engineering-patterns/patterns/semantic-medallion/) | [Architecture Decision Records](https://naren-chakraview.github.io/chakraview-data-engineering-patterns/adrs/#semantic-medallion)
+
+---
+
 ## How to use
 
 **Browse everything** — clone `main` and explore `patterns/`:
