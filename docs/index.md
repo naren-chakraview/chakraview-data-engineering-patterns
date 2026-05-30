@@ -116,4 +116,25 @@ Nine opinionated, production-informed reference implementations of common data e
 
     [:octicons-arrow-right-24: Workflow Orchestration](patterns/workflow-orchestration.md)
 
+-   :material-rdf:{ .lg .middle } __Semantic Medallion__
+
+    ---
+
+    Extends Batch Lakehouse, CDC Pipeline, and Federated Query with RDF triples and SPARQL for entity deduplication and semantic reasoning across polyglot sources.
+
+    [:octicons-arrow-right-24: Semantic Medallion](patterns/semantic-medallion.md)
+
 </div>
+
+---
+
+## Architecture decision records
+
+Key design decisions for the patterns library:
+
+- [ADR-0001: Pattern Matrix Repo Structure](adrs/ADR-0001-pattern-matrix-structure.md)
+- [ADR-0011: Semantic Medallion Approach](adrs/ADR-0011-semantic-medallion-approach.md)
+- [ADR-0012: RDF Storage — Jena TDB2 Choice](adrs/ADR-0012-rdf-storage-jena-choice.md)
+- [ADR-0013: Entity Resolution Strategy](adrs/ADR-0013-entity-resolution-strategy.md)
+
+Browse [all ADRs](adrs/).

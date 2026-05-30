@@ -9,11 +9,13 @@ Right for polyglot data estates where ETL is too expensive or slow.
 |---|---|---|---|
 | `trino-iceberg-s3` | Trino 450 | Iceberg on MinIO/S3 | `pattern/federated-query/trino-iceberg-s3` |
 | `presto-hive` | Presto 0.287 | Hive Metastore (PostgreSQL-backed) | `pattern/federated-query/presto-hive` |
+| `trino-jena-sparql` | Trino 450 + Apache Jena | Iceberg + RDF (Jena) | `pattern/federated-query/trino-jena-sparql` |
 
 ## Choosing between variants
 
 - **trino-iceberg-s3**: default. Trino is more actively developed; Iceberg is the portability choice.
 - **presto-hive**: choose if you have an existing Hive Metastore or Hadoop estate to federate over.
+- **trino-jena-sparql**: choose when you need SPARQL queries over RDF data alongside SQL federated queries. Enables cross-domain semantic reasoning. See [Semantic Medallion pattern](../../docs/patterns/semantic-medallion.md).
 
 ## How federation works
 

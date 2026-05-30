@@ -9,6 +9,13 @@ Debezium reads the database WAL and streams every committed change to Kafka. A d
 |---|---|---|---|
 | `debezium-kafka-flink` | Flink 1.19 (Java) | ~5s | `pattern/cdc-pipeline/debezium-kafka-flink` |
 | `debezium-kafka-spark` | Spark 3.5 Structured Streaming (Scala) | ~30–60s | `pattern/cdc-pipeline/debezium-kafka-spark` |
+| `debezium-kafka-semantic` | Flink 1.19 + RDF (Jena) | ~5s | `pattern/cdc-pipeline/debezium-kafka-semantic` |
+
+## Choosing between variants
+
+- **debezium-kafka-flink**: default choice. True streaming with event-time semantics. Choose when sub-5s latency is required.
+- **debezium-kafka-spark**: choose when your team uses Spark elsewhere and prefers Structured Streaming.
+- **debezium-kafka-semantic**: choose when you need real-time entity resolution and RDF emission from CDC events. See [Semantic Medallion pattern](../../docs/patterns/semantic-medallion.md).
 
 ## Prerequisites
 
