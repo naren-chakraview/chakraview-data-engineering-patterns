@@ -1,0 +1,43 @@
+@prefix : <https://company.com/ontology#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Classes
+:Customer a rdfs:Class ;
+    rdfs:label "Customer"@en ;
+    rdfs:comment "A customer in the business"@en .
+
+:Invoice a rdfs:Class ;
+    rdfs:label "Invoice"@en ;
+    rdfs:comment "An invoice issued to a customer"@en .
+
+:Transaction a rdfs:Class ;
+    rdfs:label "Transaction"@en ;
+    rdfs:comment "A payment transaction"@en .
+
+# Properties
+:hasName a rdf:Property ;
+    rdfs:domain :Customer ;
+    rdfs:range xsd:string ;
+    rdfs:label "has name"@en .
+
+:hasStatus a rdf:Property ;
+    rdfs:domain :Customer ;
+    rdfs:range xsd:string ;
+    rdfs:label "has status"@en .
+
+:hasInvoice a rdf:Property ;
+    rdfs:domain :Customer ;
+    rdfs:range :Invoice ;
+    rdfs:label "has invoice"@en .
+
+:amount a rdf:Property ;
+    rdfs:domain :Invoice ;
+    rdfs:range xsd:decimal ;
+    rdfs:label "amount"@en .
+
+:isPaid a rdf:Property ;
+    rdfs:domain :Invoice ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "is paid"@en .
