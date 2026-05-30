@@ -62,10 +62,50 @@ curl -X POST http://localhost:8080/api/query \
 docker-compose down -v
 ```
 
+## How to Use the Shared Ontology
+
+The shared ontology defines a contract that all domains agree to follow. It is **not prescriptive** (it does not dictate implementation), but rather **descriptive** (it defines what entities and properties exist in the shared semantic space).
+
+### For Domain Teams
+
+1. **Understand Entity Ownership**: Each core entity is owned by exactly one domain:
+   - **Accounts domain** owns: `fintech:Customer`, `fintech:Account`
+   - **Transactions domain** owns: `fintech:Transaction`, `fintech:Counterparty`
+   - **Risk/Compliance domain** owns: `fintech:RiskProfile`
+
+2. **Use Shared Properties**: All entities use three shared properties:
+   - `fintech:iri` – The stable Internationalized Resource Identifier minted by the owning domain
+   - `fintech:sourceSystem` – The domain that produced this entity (e.g., "accounts", "transactions", "risk-compliance")
+   - `fintech:sourceIngestionTime` – When the entity was ingested into the semantic layer (xsd:dateTime)
+
+3. **Extend Domain-Specific Properties**: Beyond the shared ontology, each domain defines its own properties:
+   - Domain-specific properties should use a domain-specific prefix (e.g., `accounts:accountNumber`, `transactions:txnAmount`)
+   - Domain-specific properties MAY reference shared entities but should not redefine them
+   - All domain-specific properties should be documented in the domain's own ontology file
+
+4. **Resolve Cross-Domain References**: When referencing an entity from another domain:
+   - Always use the owning domain's IRI as the canonical reference
+   - Use RDF predicates like `owl:sameAs` to link equivalent representations across systems
+   - Include provenance metadata (sourceSystem, sourceIngestionTime) with all data
+
+### Ontology Validation
+
+The shared ontology is versioned and validated:
+
+```bash
+# Validate Turtle syntax
+python3 << 'EOF'
+from rdflib import Graph
+g = Graph().parse("shared-ontology.ttl", format="turtle")
+print(f"Valid! {len(g)} triples loaded")
+EOF
+```
+
 ## Files
 
 ### Case Study Documentation
 
+- **shared-ontology.ttl**: Shared fintech ontology defining cross-domain entities and properties (fintech:Customer, fintech:Account, fintech:Transaction, fintech:Counterparty, fintech:RiskProfile)
 - **sample-data/**: Sample transaction, account, and market data in JSON and CSV formats for testing and demonstration
 - **queries/**: Example SPARQL queries demonstrating semantic integration across fintech domains
 - **docker-compose.yml**: Full-stack orchestration including Kafka, PostgreSQL, Trino, Jena, and Redis

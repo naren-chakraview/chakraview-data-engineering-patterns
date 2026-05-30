@@ -1,0 +1,128 @@
+@prefix fintech: <https://chakracommerce.com/ontology/fintech/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+
+# ============================================================================
+# Shared Fintech Ontology
+# ============================================================================
+# This ontology defines the shared contracts for cross-domain fintech entities.
+# No single domain owns these exclusively—they are negotiated definitions that
+# all domains reference and agree upon.
+#
+# Entity Ownership:
+#   - fintech:Customer → owned by Accounts domain
+#   - fintech:Account → owned by Accounts domain
+#   - fintech:Transaction → owned by Transactions domain
+#   - fintech:Counterparty → owned by Transactions domain
+#   - fintech:RiskProfile → owned by Risk/Compliance domain
+#
+# Shared Properties (cross-domain):
+#   - fintech:iri → stable IRI minted by owning domain
+#   - fintech:sourceSystem → which domain produced this data
+#   - fintech:sourceIngestionTime → when data was ingested
+#
+# ============================================================================
+
+# ============================================================================
+# Entity Classes
+# ============================================================================
+
+fintech:Customer
+  a rdfs:Class ;
+  rdfs:label "Customer"@en ;
+  rdfs:comment "A legal entity (individual or organization) that holds accounts and engages in financial transactions. Owned by the Accounts domain."@en ;
+  fintech:owningDomain "accounts" ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+fintech:Account
+  a rdfs:Class ;
+  rdfs:label "Account"@en ;
+  rdfs:comment "A financial account held by a customer, representing a contractual relationship for holding deposits, managing credit, or facilitating transactions. Owned by the Accounts domain."@en ;
+  fintech:owningDomain "accounts" ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+fintech:Transaction
+  a rdfs:Class ;
+  rdfs:label "Transaction"@en ;
+  rdfs:comment "A completed or pending transfer of funds between accounts. Records the movement of value, including payments, transfers, and settlements. Owned by the Transactions domain."@en ;
+  fintech:owningDomain "transactions" ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+fintech:Counterparty
+  a rdfs:Class ;
+  rdfs:label "Counterparty"@en ;
+  rdfs:comment "An external party (individual, organization, financial institution) involved in a transaction. Represents the other side of a financial contract or transaction. Owned by the Transactions domain."@en ;
+  fintech:owningDomain "transactions" ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+fintech:RiskProfile
+  a rdfs:Class ;
+  rdfs:label "Risk Profile"@en ;
+  rdfs:comment "An assessment of the risk characteristics and classification of an entity (customer, account, or counterparty). Captures compliance status, regulatory classification, and risk scoring. Owned by the Risk/Compliance domain."@en ;
+  fintech:owningDomain "risk-compliance" ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+# ============================================================================
+# Shared Cross-Domain Properties
+# ============================================================================
+
+fintech:iri
+  a rdf:Property ;
+  rdfs:label "IRI"@en ;
+  rdfs:comment "Stable Internationalized Resource Identifier (IRI) that uniquely identifies a semantic entity across domains. Minted by the owning domain according to its business semantics and is guaranteed to be globally unique."@en ;
+  rdfs:domain rdfs:Resource ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+fintech:sourceSystem
+  a rdf:Property ;
+  rdfs:label "Source System"@en ;
+  rdfs:comment "The originating domain or system that produced or owns this entity. Used for tracking data provenance and identifying the authoritative source for entity reconciliation."@en ;
+  rdfs:domain rdfs:Resource ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+fintech:sourceIngestionTime
+  a rdf:Property ;
+  rdfs:label "Source Ingestion Time"@en ;
+  rdfs:comment "The timestamp when the entity data was ingested into the semantic integration layer. Records when the data became available for cross-domain querying."@en ;
+  rdfs:domain rdfs:Resource ;
+  rdfs:range xsd:dateTime ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+# ============================================================================
+# Domain Property: Owning Domain
+# ============================================================================
+
+fintech:owningDomain
+  a rdf:Property ;
+  rdfs:label "Owning Domain"@en ;
+  rdfs:comment "Identifies which domain owns and is authoritative for a given class. Used in architecture documentation and schema governance to track domain boundaries."@en ;
+  rdfs:domain rdfs:Class ;
+  rdfs:range xsd:string ;
+  rdfs:isDefinedBy fintech: ;
+  .
+
+# ============================================================================
+# Ontology Metadata
+# ============================================================================
+
+fintech:
+  a owl:Ontology ;
+  rdfs:label "Fintech Shared Ontology"@en ;
+  rdfs:comment "A shared semantic vocabulary for fintech domain integration. Defines core entity types and cross-domain properties negotiated by the Accounts, Transactions, and Risk/Compliance domains."@en ;
+  owl:versionInfo "1.0.0" ;
+  dcterms:created "2026-05-30"^^xsd:date ;
+  dcterms:modified "2026-05-30"^^xsd:date ;
+  .
