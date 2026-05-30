@@ -1,0 +1,5 @@
+ticket_id,customer_id,severity,created_at
+ticket_001,cust_001,escalation,2026-05-23T14:30:00Z
+ticket_002,cust_001,escalation,2026-05-22T09:15:00Z
+ticket_003,cust_001,escalation,2026-05-20T16:45:00Z
+ticket_004,cust_002,info,2026-05-21T12:00:00Z

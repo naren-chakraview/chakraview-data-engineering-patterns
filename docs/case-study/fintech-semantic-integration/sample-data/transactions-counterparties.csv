@@ -1,0 +1,5 @@
+counterparty_id,name,type,total_volume_30d
+stripe,Stripe,processor,1500000.00
+paypal,PayPal,processor,800000.00
+square,Square,processor,450000.00
+acme-merchant,ACME Corp,merchant,250000.00

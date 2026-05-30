@@ -1,0 +1,4 @@
+customer_id,email,kyc_id,name,status
+cust_001,john@acme.com,kyc_9999,John Doe,active
+cust_002,jane@techcorp.io,kyc_8888,Jane Smith,active
+cust_003,bob@widgets.com,kyc_7777,Bob Wilson,suspended

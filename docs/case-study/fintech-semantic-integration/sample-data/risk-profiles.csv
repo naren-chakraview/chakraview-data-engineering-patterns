@@ -1,0 +1,4 @@
+risk_id,customer_id,risk_score,compliance_status,kyc_status
+risk_001,cust_001,0.85,review,verified
+risk_002,cust_002,0.23,clear,verified
+risk_003,cust_003,0.92,restricted,failed

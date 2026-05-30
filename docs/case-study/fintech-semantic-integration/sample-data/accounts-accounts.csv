@@ -1,0 +1,4 @@
+account_id,customer_id,balance,status,account_type
+acct_001,cust_001,5000.00,active,checking
+acct_002,cust_001,2500.50,active,savings
+acct_003,cust_002,12000.00,active,checking

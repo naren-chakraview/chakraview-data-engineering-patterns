@@ -1,0 +1,5 @@
+transaction_id,customer_id,counterparty_id,amount,date,status
+txn_001,cust_001,stripe,2500.00,2026-05-24T08:00:00Z,failed
+txn_002,cust_001,acme-merchant,1500.00,2026-05-22T14:30:00Z,executed
+txn_003,cust_002,paypal,500.00,2026-05-20T10:15:00Z,executed
+txn_004,cust_003,stripe,3000.00,2026-05-19T12:45:00Z,failed
