@@ -1,0 +1,8 @@
+PREFIX : <https://company.com/ontology#>
+
+SELECT ?customer ?name WHERE {
+  ?customer a :Customer .
+  ?customer :hasName ?name .
+  ?customer :hasStatus :Active .
+}
+LIMIT 100
