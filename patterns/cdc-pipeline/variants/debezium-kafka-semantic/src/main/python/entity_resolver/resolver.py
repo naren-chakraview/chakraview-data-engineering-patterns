@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from typing import Dict, Any, List, Optional
 
 
@@ -49,24 +50,35 @@ class EntityResolver:
 
 
 class DeduplicationCache:
-    """In-memory cache for deduplication across Kafka topics"""
+    """In-memory LRU cache for deduplication across Kafka topics"""
 
     def __init__(self, max_size: int = 10000):
-        self.cache = {}  # entity_type -> {normalized_key -> iri}
+        if max_size <= 0:
+            raise ValueError("max_size must be > 0")
+        self.cache = {}  # entity_type -> OrderedDict({key -> iri})
         self.max_size = max_size
 
     def get_iri(self, entity_type: str, key: str) -> Optional[str]:
         """Retrieve cached IRI for entity"""
-        return self.cache.get(entity_type, {}).get(key)
+        if entity_type not in self.cache:
+            return None
+
+        iri = self.cache[entity_type].get(key)
+        if iri:
+            # Move to end (mark as recently accessed)
+            self.cache[entity_type].move_to_end(key)
+        return iri
 
     def put_iri(self, entity_type: str, key: str, iri: str):
-        """Cache IRI for entity"""
+        """Cache IRI for entity, evicting oldest if needed"""
         if entity_type not in self.cache:
-            self.cache[entity_type] = {}
+            self.cache[entity_type] = OrderedDict()
 
+        # If cache full, evict oldest (first item)
         if len(self.cache[entity_type]) >= self.max_size:
-            # Simple eviction: remove oldest (in production, use LRU)
             oldest_key = next(iter(self.cache[entity_type]))
             del self.cache[entity_type][oldest_key]
 
         self.cache[entity_type][key] = iri
+        # Move to end (most recently used)
+        self.cache[entity_type].move_to_end(key)
