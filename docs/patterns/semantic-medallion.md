@@ -31,9 +31,9 @@ Semantic medallion extends three existing patterns. Each adds semantic capabilit
 
 | Variant | Base pattern | Storage | SPARQL engine | When to use |
 |---|---|---|---|---|
-| [spark-iceberg-semantic](../patterns/batch-lakehouse/variants/spark-iceberg-semantic) | Batch Lakehouse | Iceberg on S3 + Jena TDB2 | Apache Jena TDB2 | Scheduled batch jobs; entity deduplication via deterministic IRI minting |
-| [debezium-kafka-semantic](../patterns/cdc-pipeline/variants/debezium-kafka-semantic) | CDC Pipeline | Kafka + Jena TDB2 | Apache Jena TDB2 | Streaming CDC; real-time entity resolution at ingest; event-sourced semantic facts |
-| [trino-jena-sparql](../patterns/federated-query/variants/trino-jena-sparql) | Federated Query | Trino + Jena TDB2 | Apache Jena TDB2 with Trino | Query across SQL + Iceberg + graph; semantic joins without moving data |
+| spark-iceberg-semantic | Batch Lakehouse | Iceberg on S3 + Jena TDB2 | Apache Jena TDB2 | Scheduled batch jobs; entity deduplication via deterministic IRI minting |
+| debezium-kafka-semantic | CDC Pipeline | Kafka + Jena TDB2 | Apache Jena TDB2 | Streaming CDC; real-time entity resolution at ingest; event-sourced semantic facts |
+| trino-jena-sparql | Federated Query | Trino + Jena TDB2 | Apache Jena TDB2 with Trino | Query across SQL + Iceberg + graph; semantic joins without moving data |
 
 ## Trade-offs
 
@@ -47,7 +47,7 @@ Semantic medallion extends three existing patterns. Each adds semantic capabilit
 
 ## Case study
 
-See [Semantic Medallion Case Study](../../case-studies/semantic-medallion.md) for a step-by-step walkthrough of unifying customer entities across a payments system, an order management system, and a marketing platform.
+See [Semantic Medallion Case Study](https://github.com/naren-chakraview/chakraview-enterprise-modernization/tree/main/docs/case-study/phase-2-semantic-unification) in the chakraview-enterprise-modernization repo for a step-by-step walkthrough of unifying customer entities across a payments system, an order management system, and a marketing platform.
 
 ## Related patterns
 

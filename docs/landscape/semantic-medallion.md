@@ -92,4 +92,4 @@ Traditional approaches to this problem are expensive:
 - [Apache Jena](https://jena.apache.org/) — RDF storage and SPARQL query engine
 - [W3C SPARQL specification](https://www.w3.org/TR/sparql11-query/) — query language reference
 - [schema.org](https://schema.org/) — standard vocabulary for common entities (Person, Organization, Product, etc.)
-- [Semantic medallion case study](../../case-studies/semantic-medallion.md) — step-by-step example
+- [Semantic medallion case study](https://github.com/naren-chakraview/chakraview-enterprise-modernization/tree/main/docs/case-study/phase-2-semantic-unification) — step-by-step example in enterprise-modernization repo
