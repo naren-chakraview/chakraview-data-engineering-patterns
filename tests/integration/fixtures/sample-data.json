@@ -1,0 +1,14 @@
+{
+  "customers": [
+    {"id": "c1", "email": "acme@example.com", "domain": "example.com", "name": "Acme Corp", "status": "active"},
+    {"id": "c2", "email": "betacorp@acme.com", "domain": "acme.com", "name": "Beta Corp", "status": "inactive"}
+  ],
+  "invoices": [
+    {"id": "i1", "customer_id": "c1", "amount": 1000, "paid": true},
+    {"id": "i2", "customer_id": "c1", "amount": 500, "paid": false}
+  ],
+  "transactions": [
+    {"id": "t1", "customer_id": "c1", "amount": 1000, "status": "completed"},
+    {"id": "t2", "customer_id": "c2", "amount": 250, "status": "pending"}
+  ]
+}
