@@ -89,11 +89,27 @@
          <lastmod>2026-05-30</lastmod>
     </url>
     <url>
+         <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/adrs/ADR-0011-semantic-medallion-approach/</loc>
+         <lastmod>2026-05-30</lastmod>
+    </url>
+    <url>
+         <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/adrs/ADR-0012-rdf-storage-jena-choice/</loc>
+         <lastmod>2026-05-30</lastmod>
+    </url>
+    <url>
+         <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/adrs/ADR-0013-entity-resolution-strategy/</loc>
+         <lastmod>2026-05-30</lastmod>
+    </url>
+    <url>
          <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/decision-matrix/</loc>
          <lastmod>2026-05-30</lastmod>
     </url>
     <url>
          <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/landscape/</loc>
+         <lastmod>2026-05-30</lastmod>
+    </url>
+    <url>
+         <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/landscape/semantic-medallion/</loc>
          <lastmod>2026-05-30</lastmod>
     </url>
     <url>
@@ -122,6 +138,10 @@
     </url>
     <url>
          <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/patterns/ml-feature-pipeline/</loc>
+         <lastmod>2026-05-30</lastmod>
+    </url>
+    <url>
+         <loc>https://naren-chakraview.github.io/chakraview-data-engineering-patterns/patterns/semantic-medallion/</loc>
          <lastmod>2026-05-30</lastmod>
     </url>
     <url>
